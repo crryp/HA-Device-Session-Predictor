@@ -1,0 +1,28 @@
+# ============================================================================
+# Dashboard card snippet (mushroom-template-card)
+# ============================================================================
+# This does NOT automatically come along with the package — dashboards
+# (Lovelace) are stored separately from your YAML config. Paste this
+# manually into your own dashboard, or use it as a base for an existing
+# card.
+#
+# Requires the "Mushroom" custom card (via HACS: "Mushroom" by piitaya).
+#
+# BEFORE YOU USE THIS:
+#   - Replace sensor.FILL_IN_YOUR_POWER_SENSOR with your own sensor
+#   - Replace "Device" with whatever name you want displayed
+#   - Adjust the icon to taste
+# ============================================================================
+
+type: custom:mushroom-template-card
+entity: sensor.FILL_IN_YOUR_POWER_SENSOR
+primary: "Device"
+icon: mdi:washing-machine
+secondary: >-
+  {% if is_state('sensor.FILL_IN_YOUR_POWER_SENSOR', '0.0') %}
+  {% else %}
+  {{ states('sensor.FILL_IN_YOUR_POWER_SENSOR') | int }}W
+  {% if is_state('input_boolean.device_session_active', 'on') %}
+  {{ states('sensor.device_remaining_time') }} min
+  {% endif %}
+  {% endif %}

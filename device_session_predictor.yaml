@@ -1,0 +1,497 @@
+# ============================================================================
+# Device Session Predictor
+# ============================================================================
+# Estimates how much longer a "dumb" appliance (washing machine, dishwasher,
+# dryer, ...) still needs to run, based purely on a power sensor (Watts).
+# No smart connection to the appliance itself required.
+#
+# HOW IT WORKS (short version)
+#   1. Session detection: power above one threshold = "on", power below a
+#      different (lower) threshold = "off". Both require the reading to
+#      hold continuously for a minimum duration (debounce), so brief spikes
+#      or dips between program phases don't get mistaken for a real
+#      start/end.
+#   2. During a session, "checkpoints" of cumulative energy use are logged
+#      at two speeds: a fine series (early, high resolution) and a coarse
+#      series (later, low resolution, longer coverage).
+#   3. At session end, the duration + energy use + curve are saved into a
+#      small history (last N sessions).
+#   4. During a NEW session, the curve-so-far is compared against the
+#      stored curves; the closest match determines the estimate.
+#   5. Near-identical sessions (same duration + energy use) are not stored
+#      as a separate curve but merged, so the limited storage doesn't fill
+#      up with 6 copies of the same program.
+#
+# BEFORE YOU USE THIS — change the following:
+#
+#   1. Search for "FILL_IN" below and enter your own power sensor
+#      (entity_id of a sensor that reports current power in Watts).
+#
+#   2. Adjust the start/end threshold values (marked "ADJUST" below).
+#      These are appliance-specific — measure what a reliable "on"/"off"
+#      threshold looks like for YOUR appliance. Rule of thumb:
+#        - Start threshold: a value the appliance only reaches when a
+#          program is genuinely running (not during standby/menu
+#          navigation).
+#        - End threshold: ideally as close as possible to the appliance's
+#          true "fully idle" level (sometimes literally 0W, sometimes a
+#          few Watts of residual draw) — the closer to zero, the less
+#          likely a pause between program phases gets mistaken for "done".
+#        - Duration (for:): how long the threshold must be crossed
+#          continuously before it counts as a real start/end. Longer =
+#          less sensitive to brief fluctuations, but slower to react.
+#
+#   3. Replace "device" (in entity names) with a short name for your own
+#      appliance if you're using this more than once (e.g. "washer",
+#      "dishwasher") — so the entities stay distinguishable. Note: if you
+#      do this, apply it CONSISTENTLY throughout this file (also in the
+#      automation triggers/actions and the remaining-time sensor below).
+#
+# GOOD TO KNOW (not required)
+#   - The "curves" storage uses input_text helpers with a 255-character
+#     limit. That bounds how many checkpoints x how many sessions you can
+#     keep. The defaults below (6 fine + 9 coarse checkpoints, last 6
+#     sessions) fit comfortably within that limit.
+#   - Short programs will naturally end up with fewer checkpoints (they
+#     finish before all checkpoint moments have passed) — that's not a
+#     bug, it's a useful signal ("few points = short program").
+# ============================================================================
+
+input_boolean:
+  device_session_active:
+    name: "Device session active"
+
+input_datetime:
+  device_session_start:
+    name: "Device session start"
+    has_date: true
+    has_time: true
+
+input_text:
+  device_session_durations:
+    name: "Device session durations"
+    max: 255
+    # Comma-separated list of the most recent session durations in
+    # minutes, e.g. "85,73,122,118". Used for the simple-average fallback
+    # and as the pool checked against for duplicate detection. Trims
+    # automatically to the last 20 sessions.
+
+  device_session_kwh:
+    name: "Device session kwh"
+    max: 255
+    # Same idea as above, but total energy use (kWh) per session. Mostly
+    # informational/log; not strictly required for the calculation itself.
+
+  device_curve_durations:
+    name: "Device curve durations"
+    max: 255
+    # Like session_durations, but ONLY the sessions that also got a
+    # curve (i.e. excluding duplicates that were skipped). Stays 1:1
+    # aligned with the curve lists below — use this list (not
+    # session_durations) to match curves against.
+
+  device_curve_kwh:
+    name: "Device curve kwh"
+    max: 255
+    # Same idea, but kWh — belongs to the same sessions as curve_durations.
+
+  device_session_curves:
+    name: "Device session curves"
+    max: 255
+    # Last ~6 FINE curves. One curve = checkpoint values (cumulative kWh)
+    # separated by "|", sessions separated by ";". Example:
+    #   "0.35|0.7|0.91|0.92|0.94|0.95;0.19|0.27|0.31|0.32|0.33|0.34"
+    # is the fine curve of 2 sessions, each with 6 checkpoints.
+
+  device_session_curves_coarse:
+    name: "Device session curves coarse"
+    max: 255
+    # Same layout, but the COARSE curves (see below: less frequent
+    # checkpoints, longer coverage — important for telling long and
+    # medium-length programs apart, something the fine curve alone often
+    # can't do because it stops recording after the first hour).
+
+  device_current_curve:
+    name: "Device current curve"
+    max: 255
+    # The fine curve of the CURRENTLY RUNNING session, built up during
+    # the session and moved into session_curves once the session ends.
+
+  device_current_curve_coarse:
+    name: "Device current curve coarse"
+    max: 255
+    # Same idea, but the coarse curve of the current session.
+
+# ----------------------------------------------------------------------------
+# Energy metering: power -> cumulative kWh -> kWh since session start
+# ----------------------------------------------------------------------------
+sensor:
+  - platform: integration
+    name: "Device energy"
+    source: sensor.FILL_IN_YOUR_POWER_SENSOR   # <-- ADJUST
+    unit_prefix: k
+    unit_time: h
+    method: left
+    round: 3
+
+  - platform: template
+    sensors:
+      device_remaining_time:
+        friendly_name: "Device remaining time"
+        unit_of_measurement: "min"
+        value_template: >-
+          {% set active = is_state('input_boolean.device_session_active', 'on') %}
+          {%- if not active -%}
+          0
+          {%- else -%}
+          {%- set ts = state_attr('input_datetime.device_session_start', 'timestamp') -%}
+          {%- set elapsed = ((now().timestamp() - ts) / 60) if ts is not none else 0 -%}
+          {%- set durs = states('input_text.device_session_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- if durs | length == 0 -%}
+          90
+          {%- else -%}
+          {%- set cur_coarse = states('input_text.device_current_curve_coarse').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set curves_coarse = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
+          {%- set cur_fine = states('input_text.device_current_curve').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set curves_fine = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
+          {%- set curve_durs = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set n_fine = curves_fine | length -%}
+          {%- set n_coarse = curves_coarse | length -%}
+          {%- if n_fine == 0 or (cur_fine | length == 0 and cur_coarse | length == 0) -%}
+          {{ [((durs | sum / durs | length) - elapsed), 0] | max | round(0) }}
+          {%- else -%}
+          {%- set coarse_offset = n_fine - n_coarse -%}
+          {%- set aligned_durs = curve_durs -%}
+          {%- set ns = namespace(best_score=none, best_dur=aligned_durs[0], second_score=none, second_dur=none) -%}
+          {%- for i in range(n_fine) -%}
+          {%- set score = namespace(v=0, has_any=false) -%}
+          {%- if cur_fine | length > 0 -%}
+          {%- set hist_fine = curves_fine[i].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set nA = [cur_fine|length, hist_fine|length] | min -%}
+          {%- if nA > 0 -%}
+          {%- set fd = namespace(v=0) -%}
+          {%- for j in range(nA) -%}{%- set fd.v = fd.v + (cur_fine[j]-hist_fine[j])|abs -%}{%- endfor -%}
+          {%- set score.v = score.v + fd.v -%}
+          {%- set score.has_any = true -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- if cur_coarse | length > 0 and i >= coarse_offset -%}
+          {%- set hist_coarse = curves_coarse[i - coarse_offset].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set nB = [cur_coarse|length, hist_coarse|length] | min -%}
+          {%- if nB > 0 -%}
+          {%- set cd = namespace(v=0) -%}
+          {%- for j in range(nB) -%}{%- set cd.v = cd.v + (cur_coarse[j]-hist_coarse[j])|abs -%}{%- endfor -%}
+          {%- set score.v = score.v + cd.v -%}
+          {%- set score.has_any = true -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- if score.has_any -%}
+          {%- if ns.best_score is none or score.v < ns.best_score -%}
+          {%- set ns.second_score = ns.best_score -%}
+          {%- set ns.second_dur = ns.best_dur -%}
+          {%- set ns.best_score = score.v -%}
+          {%- set ns.best_dur = aligned_durs[i] -%}
+          {%- elif ns.second_score is none or score.v < ns.second_score -%}
+          {%- set ns.second_score = score.v -%}
+          {%- set ns.second_dur = aligned_durs[i] -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- if ns.second_dur is not none and elapsed > (ns.best_dur + 5) -%}
+          {{ [(ns.second_dur - elapsed), 0] | max | round(0) }}
+          {%- else -%}
+          {{ [(ns.best_dur - elapsed), 0] | max | round(0) }}
+          {%- endif -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- endif -%}
+
+utility_meter:
+  device_energy_session:
+    name: "Device energy session"
+    source: sensor.device_energy
+    cycle: none
+    # cycle: none = no automatic reset (day/week/month); we reset this
+    # ourselves at every session start via the automation below.
+
+# ----------------------------------------------------------------------------
+# Automations
+# ----------------------------------------------------------------------------
+automation:
+  # --------------------------------------------------------------------------
+  # 1. Session start + checkpoints
+  # --------------------------------------------------------------------------
+  - id: device_session_start_and_checkpoints
+    alias: "Device session start and checkpoints"
+    description: >-
+      On a confirmed start (power above threshold, held continuously long
+      enough): reset the energy counter and start two parallel checkpoint
+      cycles (fine + coarse). Only resets if no session is currently
+      active, so a brief interruption during a session doesn't restart
+      everything from scratch.
+    mode: restart
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.FILL_IN_YOUR_POWER_SENSOR   # <-- ADJUST
+        above: 40   # <-- ADJUST: start threshold in Watts
+        for:
+          minutes: 3   # <-- ADJUST: how long it must hold continuously
+    conditions:
+      - condition: state
+        entity_id: input_boolean.device_session_active
+        state: "off"
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.device_session_start
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - action: utility_meter.calibrate
+        target:
+          entity_id: sensor.device_energy_session
+        data:
+          value: 0
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.device_current_curve
+        data:
+          value: ""
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.device_current_curve_coarse
+        data:
+          value: ""
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.device_session_active
+      - parallel:
+          # Fine checkpoints: every 10 min, up to 6x (covers the first
+          # hour). This usually captures the most distinctive phase of a
+          # program (e.g. the heating phase), where energy use climbs
+          # fastest.
+          - sequence:
+              - repeat:
+                  count: 6
+                  sequence:
+                    - delay:
+                        minutes: 10
+                    - if:
+                        - condition: state
+                          entity_id: input_boolean.device_session_active
+                          state: "on"
+                      then:
+                        - action: input_text.set_value
+                          target:
+                            entity_id: input_text.device_current_curve
+                          data:
+                            value: >-
+                              {% set cur = states('input_text.device_current_curve') %}
+                              {% set new_val = states('sensor.device_energy_session') | float(0) | round(2) %}
+                              {{ (cur + '|' + new_val|string) if cur not in ['', 'unknown', 'unavailable'] else new_val|string }}
+          # Coarse checkpoints: every 20 min, up to 9x (covers up to 3
+          # hours). Needed to tell long and medium-length programs apart
+          # — the fine curve alone can't, since it stops after the first
+          # hour.
+          - sequence:
+              - repeat:
+                  count: 9
+                  sequence:
+                    - delay:
+                        minutes: 20
+                    - if:
+                        - condition: state
+                          entity_id: input_boolean.device_session_active
+                          state: "on"
+                      then:
+                        - action: input_text.set_value
+                          target:
+                            entity_id: input_text.device_current_curve_coarse
+                          data:
+                            value: >-
+                              {% set cur = states('input_text.device_current_curve_coarse') %}
+                              {% set new_val = states('sensor.device_energy_session') | float(0) | round(2) %}
+                              {{ (cur + '|' + new_val|string) if cur not in ['', 'unknown', 'unavailable'] else new_val|string }}
+
+  # --------------------------------------------------------------------------
+  # 2. Session end + update history (incl. duplicate detection)
+  # --------------------------------------------------------------------------
+  - id: device_session_end_update_history
+    alias: "Device session end - update history"
+    description: >-
+      On a confirmed end (power below threshold, held continuously long
+      enough): compute duration + kWh, and save the curve — UNLESS this
+      is essentially identical (duration and energy use) to an
+      already-stored session (in that case the existing curve is only
+      replaced if the new curve is more complete; otherwise the curve
+      storage is left untouched).
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.FILL_IN_YOUR_POWER_SENSOR   # <-- ADJUST
+        below: 35   # <-- ADJUST: end threshold in Watts (ideally as
+                    #     close as possible to the appliance's true idle
+                    #     level)
+        for:
+          minutes: 2
+          seconds: 30   # <-- ADJUST: how long it must hold continuously
+    conditions:
+      - condition: state
+        entity_id: input_boolean.device_session_active
+        state: "on"
+    variables:
+      duration_min: >-
+        {{ ((now().timestamp() - state_attr('input_datetime.device_session_start', 'timestamp')) / 60) | round(0)
+           if state_attr('input_datetime.device_session_start', 'timestamp') is not none else 0 }}
+      kwh_total: "{{ states('sensor.device_energy_session') | float(0) | round(3) }}"
+      match_index: >-
+        {% set cd = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
+        {% set ck = states('input_text.device_curve_kwh').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
+        {% set n = [cd|length, ck|length] | min %}
+        {% set ns = namespace(idx=-1) %}
+        {% for i in range(n) %}
+        {% set kdiff = (ck[i] - kwh_total) | abs %}
+        {% if (cd[i] - duration_min) | abs <= 5 and ck[i] > 0 and (kdiff <= 0.05 or (kdiff / ck[i]) <= 0.10) %}
+        {% set ns.idx = i %}
+        {% endif %}
+        {% endfor %}
+        {{ ns.idx }}
+      existing_completeness: >-
+        {% set idx = match_index | int %}
+        {% if idx == -1 %}0{% else %}
+        {% set cd = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
+        {% set existing_dur = cd[idx] %}
+        {% set cf = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
+        {% set cg = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
+        {% set fine_pts = (cf[idx].split('|') | reject('eq','') | list | length) if idx < (cf|length) else 0 %}
+        {% set coarse_pts = (cg[idx].split('|') | reject('eq','') | list | length) if idx < (cg|length) else 0 %}
+        {% set fine_expected = [ (existing_dur // 10) | int, 6 ] | min %}
+        {% set coarse_expected = [ (existing_dur // 20) | int, 9 ] | min %}
+        {% set total_expected = [fine_expected + coarse_expected, 1] | max %}
+        {{ ((fine_pts + coarse_pts) / total_expected) | round(3) }}
+        {% endif %}
+      new_completeness: >-
+        {% set fine_pts = states('input_text.device_current_curve').split('|') | reject('eq','') | list | length %}
+        {% set coarse_pts = states('input_text.device_current_curve_coarse').split('|') | reject('eq','') | list | length %}
+        {% set fine_expected = [ (duration_min // 10) | int, 6 ] | min %}
+        {% set coarse_expected = [ (duration_min // 20) | int, 9 ] | min %}
+        {% set total_expected = [fine_expected + coarse_expected, 1] | max %}
+        {{ ((fine_pts + coarse_pts) / total_expected) | round(3) }}
+    actions:
+      # Duration and kWh are ALWAYS appended to the general, roomier
+      # (20-slot) log — even on a duplicate. Costs nothing, and improves
+      # the simple-average fallback.
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.device_session_durations
+        data:
+          value: >-
+            {% set cur = states('input_text.device_session_durations') %}
+            {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+            {% set lst = lst + [duration_min | int | string] %}
+            {{ lst[-20:] | join(',') }}
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.device_session_kwh
+        data:
+          value: >-
+            {% set cur = states('input_text.device_session_kwh') %}
+            {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+            {% set lst = lst + [kwh_total | string] %}
+            {{ lst[-20:] | join(',') }}
+      # The scarce curve storage (max 6 slots) only gets appended to /
+      # overwritten when it's worthwhile:
+      - if:
+          - condition: template
+            value_template: "{{ match_index | int == -1 }}"
+        then:
+          # No match found -> add a new, distinct curve entry.
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.device_session_curves
+            data:
+              value: >-
+                {% set cur = states('input_text.device_session_curves') %}
+                {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                {% set lst = lst + [states('input_text.device_current_curve')] %}
+                {{ lst[-6:] | join(';') }}
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.device_session_curves_coarse
+            data:
+              value: >-
+                {% set cur = states('input_text.device_session_curves_coarse') %}
+                {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                {% set lst = lst + [states('input_text.device_current_curve_coarse')] %}
+                {{ lst[-6:] | join(';') }}
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.device_curve_durations
+            data:
+              value: >-
+                {% set cur = states('input_text.device_curve_durations') %}
+                {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                {% set lst = lst + [duration_min | int | string] %}
+                {{ lst[-6:] | join(',') }}
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.device_curve_kwh
+            data:
+              value: >-
+                {% set cur = states('input_text.device_curve_kwh') %}
+                {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                {% set lst = lst + [kwh_total | string] %}
+                {{ lst[-6:] | join(',') }}
+        else:
+          # Match found (duplicate) -> only replace if the new curve is
+          # more complete than the existing one.
+          - if:
+              - condition: template
+                value_template: "{{ new_completeness | float > existing_completeness | float }}"
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_session_curves
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = match_index | int %}
+                    {% if idx < (lst|length) %}
+                    {% set new_lst = lst[:idx] + [states('input_text.device_current_curve')] + lst[idx+1:] %}
+                    {% else %}
+                    {% set new_lst = lst + [states('input_text.device_current_curve')] %}
+                    {% endif %}
+                    {{ new_lst[-6:] | join(';') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_session_curves_coarse
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = match_index | int %}
+                    {% if idx < (lst|length) %}
+                    {% set new_lst = lst[:idx] + [states('input_text.device_current_curve_coarse')] + lst[idx+1:] %}
+                    {% else %}
+                    {% set new_lst = lst + [states('input_text.device_current_curve_coarse')] %}
+                    {% endif %}
+                    {{ new_lst[-6:] | join(';') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_durations
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = match_index | int %}
+                    {% set new_lst = lst[:idx] + [duration_min | int | string] + lst[idx+1:] %}
+                    {{ new_lst | join(',') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_kwh
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_curve_kwh').split(',') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = match_index | int %}
+                    {% set new_lst = lst[:idx] + [kwh_total | string] + lst[idx+1:] %}
+                    {{ new_lst | join(',') }}
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.device_session_active

@@ -1,0 +1,76 @@
+# ============================================================================
+# Device Ready Notification (OPTIONAL)
+# ============================================================================
+# Builds on device_session_predictor.yaml — that file is required.
+#
+# Sends a push notification once a session has finished, and can optionally
+# flash a light in a signal color (e.g. green = done) which is then restored
+# to EXACTLY the state it was in right before the color change — whether
+# that was "off", or "on with a particular color/brightness".
+#
+# That restore happens via the native `scene.create` service: it captures
+# the current state of the given light(s) into a temporary scene, which you
+# can later restore exactly with `scene.turn_on`. No guessing based on
+# another light, and no extra scripts needed.
+#
+# BEFORE YOU USE THIS:
+#   1. Make sure device_session_predictor.yaml is active (this file uses
+#      input_boolean.device_session_active from it).
+#   2. Fill in your own notify service (search "FILL_IN").
+#   3. Fill in the light(s) you want to include in the signal color — or
+#      remove the light steps entirely if you only want the push
+#      notification, without a light effect.
+#   4. Adjust the signal color (rgb_color/brightness_pct) to taste.
+# ============================================================================
+
+automation:
+  - id: device_ready_notification
+    alias: "Device ready notification"
+    description: >-
+      Sets light(s) to a signal color, sends a notification with a
+      confirmation button, waits a while for the tap, and then restores
+      the light(s) to their state from right before the notification.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.device_session_active
+        to: "off"
+    actions:
+      # 1. Snapshot the current light state, BEFORE we change it.
+      - action: scene.create
+        data:
+          scene_id: device_before_ready_notification
+          snapshot_entities:
+            - light.FILL_IN_YOUR_LIGHT   # <-- ADJUST (multiple lights: add more lines)
+
+      # 2. Set the signal color. Remove this step if you don't want a light effect.
+      - action: light.turn_on
+        target:
+          entity_id:
+            - light.FILL_IN_YOUR_LIGHT   # <-- ADJUST
+        data:
+          rgb_color: [0, 255, 0]   # <-- ADJUST: signal color (here: green)
+          brightness_pct: 50
+
+      # 3. Notification with a confirmation button.
+      - action: notify.FILL_IN_YOUR_NOTIFY_SERVICE   # <-- ADJUST, e.g. notify.mobile_app_my_phone
+        data:
+          message: "Device is ready"
+          data:
+            actions:
+              - action: "device_ready_ok"
+                title: "Ok"
+
+      # 4. Wait for confirmation (or proceed automatically after 20 min).
+      - wait_for_trigger:
+          - trigger: event
+            event_type: mobile_app_notification_action
+            event_data:
+              action: "device_ready_ok"
+        timeout:
+          minutes: 20
+
+      # 5. Restore the light(s) to their original state.
+      - action: scene.turn_on
+        target:
+          entity_id: scene.device_before_ready_notification
