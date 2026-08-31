@@ -1,5 +1,9 @@
 # Device Session Predictor
 
+> Built for [Home Assistant](https://www.home-assistant.io/) — this is a Home Assistant package (YAML), not a standalone app. You need a working Home Assistant instance to use it.
+>
+> *(Nederlandse versie: [README.nl.md](README.nl.md))*
+
 Estimates how much longer a "dumb" appliance (washing machine, dishwasher,
 dryer, ...) still needs to run — based purely on a power sensor (Watts). No
 smart connection to the appliance itself required, just an energy meter /

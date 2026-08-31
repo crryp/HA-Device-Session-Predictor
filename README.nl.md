@@ -1,4 +1,8 @@
-# Apparaat Sessie Voorspeller
+# Device Session Predictor
+
+> Gebouwd voor [Home Assistant](https://www.home-assistant.io/) — dit is een Home Assistant package (YAML), geen losstaande app. Je hebt een werkende Home Assistant-installatie nodig om dit te gebruiken.
+>
+> *(English version: [README.md](README.md))*
 
 Schat hoe lang een "dom" apparaat (wasmachine, vaatwasser, droger, ...) nog
 moet draaien — puur op basis van een vermogenssensor (Watt). Geen slimme
@@ -8,6 +12,11 @@ stekker die het huidige vermogen rapporteert.
 Gebouwd en getest op een wasmachine met een HomeWizard Energy Socket, maar
 werkt met elke sensor die een vermogenswaarde in Watt teruggeeft.
 
+**Let op:** de entity-namen in de YAML-bestanden en onderstaande voorbeelden
+zijn in het Engels (`device_...`) — dit is bewust gedaan zodat het project
+ook voor een internationaal publiek herbruikbaar is. Deze README is puur de
+Nederlandse uitleg erbij.
+
 ## Hoe het werkt
 
 1. **Sessiedetectie**: vermogen boven een drempel = "aan", onder een andere
@@ -16,25 +25,28 @@ werkt met elke sensor die een vermogenswaarde in Watt teruggeeft.
    worden gezien.
 2. **Checkpoints tijdens de sessie**: cumulatief energieverbruik wordt op
    twee snelheden bijgehouden:
-   - **Fijn**: elke 10 minuten, tot 6x (dekt het eerste uur) — vangt meestal
-     de meest onderscheidende fase van een programma (bv. de opwarmfase).
-   - **Grof**: elke 20 minuten, tot 9x (dekt tot 3 uur) — nodig om lange en
+   - **Fijn** (`device_current_curve` / `device_session_curves`): elke 10
+     minuten, tot 6x (dekt het eerste uur) — vangt meestal de meest
+     onderscheidende fase van een programma (bv. de opwarmfase).
+   - **Grof** (`device_current_curve_coarse` / `device_session_curves_coarse`):
+     elke 20 minuten, tot 9x (dekt tot 3 uur) — nodig om lange en
      middellange programma's uit elkaar te houden, iets waar de fijne curve
      alleen niet goed in is (die stopt na het eerste uur).
 3. **Bij sessie-einde** wordt de duur, het energieverbruik en de curve
-   opgeslagen in een kleine geschiedenis (standaard: laatste 6 curves, laatste
-   20 duren/verbruikswaarden).
-4. **Tijdens een nieuwe sessie** vergelijkt de sensor de curve-tot-nu-toe met
-   alle opgeslagen curves, en gebruikt de dichtstbijzijnde match om de
-   resterende tijd te schatten. Loopt de sessie langer door dan de beste
-   match voorspelde (met 5 minuten coulance)? Dan valt de schatting terug op
-   de een-na-beste match.
-5. **Duplicaat-detectie**: een sessie die qua duur (±5 min) én energieverbruik
-   (±10%, of ±0,05 kWh absoluut) sterk lijkt op een al opgeslagen sessie,
-   wordt niet als nieuwe curve opgeslagen — zo raken de beperkte 6 curve-
-   plekken niet gevuld met 6x hetzelfde programma. Bij een duplicaat wordt de
-   bestaande curve alleen vervangen als de nieuwe curve *vollediger* is
-   (meer checkpoints t.o.v. wat op basis van de duur verwacht mocht worden).
+   opgeslagen in een kleine geschiedenis (standaard: laatste 6 curves,
+   laatste 20 duren/verbruikswaarden).
+4. **Tijdens een nieuwe sessie** vergelijkt de sensor (`device_remaining_time`)
+   de curve-tot-nu-toe met alle opgeslagen curves, en gebruikt de
+   dichtstbijzijnde match om de resterende tijd te schatten. Loopt de sessie
+   langer door dan de beste match voorspelde (met 5 minuten coulance)? Dan
+   valt de schatting terug op de een-na-beste match.
+5. **Duplicaat-detectie**: een sessie die qua duur (±5 min) én
+   energieverbruik (±10%, of ±0,05 kWh absoluut) sterk lijkt op een al
+   opgeslagen sessie, wordt niet als nieuwe curve opgeslagen — zo raken de
+   beperkte 6 curve-plekken niet gevuld met 6x hetzelfde programma. Bij een
+   duplicaat wordt de bestaande curve alleen vervangen als de nieuwe curve
+   *vollediger* is (meer checkpoints t.o.v. wat op basis van de duur
+   verwacht mocht worden).
 
 ## Bekende beperkingen
 
@@ -43,9 +55,9 @@ werkt met elke sensor die een vermogenswaarde in Watt teruggeeft.
   variatie wordt de curve-matching zinvol.
 - **255-tekens-limiet.** De curve-opslag gebruikt `input_text`-helpers
   (HA-limiet: 255 tekens). Dat begrenst hoeveel checkpoints × hoeveel
-  sessies je kunt bewaren. De standaardinstellingen (6 fijn + 9 grof, laatste
-  6 sessies) passen ruim, maar ga je dit uitbreiden, houd de limiet in de
-  gaten.
+  sessies je kunt bewaren. De standaardinstellingen (6 fijn + 9 grof,
+  laatste 6 sessies) passen ruim, maar ga je dit uitbreiden, houd de limiet
+  in de gaten.
 - **Programma's zonder duidelijke opwarmfase** (bijv. een koud programma)
   kunnen minder goed te onderscheiden zijn, omdat een groot deel van het
   onderscheidend vermogen van de fijne curve juist uit die opwarm-piek komt.
@@ -57,8 +69,8 @@ werkt met elke sensor die een vermogenswaarde in Watt teruggeeft.
 
 | Bestand | Wat |
 |---|---|
-| `packages/apparaat_sessie_voorspeller.yaml` | **Verplicht.** De kern: sessiedetectie, checkpoints, curve-matching, resterende-tijd-sensor. |
-| `packages/apparaat_klaar_melding.yaml` | **Optioneel.** Push-melding + lamp-signaal (met automatisch herstel van de vorige lamp-staat) zodra een sessie is afgerond. |
+| `packages/device_session_predictor.yaml` | **Verplicht.** De kern: sessiedetectie, checkpoints, curve-matching, resterende-tijd-sensor. |
+| `packages/device_ready_notification.yaml` | **Optioneel.** Push-melding + lamp-signaal (met automatisch herstel van de vorige lamp-staat) zodra een sessie is afgerond. |
 | `dashboard-card.yaml` | Voorbeeld van een Mushroom-kaart die het vermogen + de resterende tijd toont. |
 
 ---
@@ -79,19 +91,19 @@ homeassistant:
   packages: !include_dir_named packages
 ```
 
-Zo niet, voeg het toe. Maak (als die nog niet bestaat) een map `packages/` aan
-naast je `configuration.yaml`.
+Zo niet, voeg het toe. Maak (als die nog niet bestaat) een map `packages/`
+aan naast je `configuration.yaml`.
 
 ### Stap 2 — Kopieer het hoofdbestand
 
-Zet `packages/apparaat_sessie_voorspeller.yaml` in jouw `config/packages/`-map.
+Zet `packages/device_session_predictor.yaml` in jouw `config/packages/`-map.
 
 ### Stap 3 — Vul de placeholders in
 
-Open het bestand en zoek naar `VUL_HIER_IN` en `AANPASSEN` — dit moet je in
-ieder geval doen:
+Open het bestand en zoek naar `FILL_IN` en `ADJUST` — dit moet je in ieder
+geval doen:
 
-1. **Je vermogenssensor**: vervang elke `sensor.VUL_HIER_IN_JE_VERMOGENSENSOR`
+1. **Je vermogenssensor**: vervang elke `sensor.FILL_IN_YOUR_POWER_SENSOR`
    door de entity_id van jouw sensor die het huidige vermogen in Watt geeft.
 2. **Start-drempel**: de `above:`-waarde in de eerste automation — hoeveel
    Watt duidt betrouwbaar op "er draait een programma" (niet op standby of
@@ -120,17 +132,18 @@ bij een nieuwe package is een herstart veiliger.
 
 ### Stap 5 — Controleer
 
-Ga naar Instellingen → Apparaten & diensten → Entiteiten, zoek op "Apparaat"
+Ga naar Instellingen → Apparaten & diensten → Entiteiten, zoek op "Device"
 — je zou alle helpers, de energiesensor en de resterende-tijd-sensor moeten
 zien. Ga naar Instellingen → Automatiseringen en controleer dat de twee
 nieuwe automations er staan en ingeschakeld zijn.
 
 ### Stap 6 (optioneel) — Klaar-melding + lamp
 
-Wil je ook een push-melding (en optioneel een lamp-signaal) zodra een sessie
-klaar is? Herhaal stap 2-4 met `packages/apparaat_klaar_melding.yaml`, en vul
-daarin je eigen notify-service en lamp(en) in (of verwijder de lamp-stappen
-als je alleen de melding wilt).
+Wil je ook een push-melding (en optioneel een lamp-signaal) zodra een
+sessie klaar is? Herhaal stap 2-4 met
+`packages/device_ready_notification.yaml`, en vul daarin je eigen
+notify-service en lamp(en) in (of verwijder de lamp-stappen als je alleen
+de melding wilt).
 
 ---
 
@@ -142,16 +155,16 @@ ook — het kost alleen meer klikwerk. Maak de volgende helpers aan via
 
 | Type | Naam |
 |---|---|
-| Aan/uit-schakelaar | Apparaat sessie bezig |
-| Datum en tijd | Apparaat sessie start |
-| Tekstveld (max 255) | Apparaat sessie duren |
-| Tekstveld (max 255) | Apparaat sessie kwh |
-| Tekstveld (max 255) | Apparaat curve duren |
-| Tekstveld (max 255) | Apparaat curve kwh |
-| Tekstveld (max 255) | Apparaat sessie curves |
-| Tekstveld (max 255) | Apparaat sessie curves grof |
-| Tekstveld (max 255) | Apparaat huidige curve |
-| Tekstveld (max 255) | Apparaat huidige curve grof |
+| Aan/uit-schakelaar | Device session active |
+| Datum en tijd | Device session start |
+| Tekstveld (max 255) | Device session durations |
+| Tekstveld (max 255) | Device session kwh |
+| Tekstveld (max 255) | Device curve durations |
+| Tekstveld (max 255) | Device curve kwh |
+| Tekstveld (max 255) | Device session curves |
+| Tekstveld (max 255) | Device session curves coarse |
+| Tekstveld (max 255) | Device current curve |
+| Tekstveld (max 255) | Device current curve coarse |
 
 Maak daarnaast aan:
 - Een **Integratie-helper** ("Riemann-som") met als bron je vermogenssensor,
@@ -160,34 +173,35 @@ Maak daarnaast aan:
 - Een **Utility Meter-helper** met als bron de zojuist gemaakte
   integratie-sensor, cyclus "geen".
 - Een **Template-sensor** met de `value_template` uit
-  `packages/apparaat_sessie_voorspeller.yaml` (kopieer de hele
+  `packages/device_session_predictor.yaml` (kopieer de hele
   `value_template:`-inhoud).
 
 Maak vervolgens de twee automations aan via **Instellingen →
 Automatiseringen → Automatisering toevoegen → In YAML bewerken**, en plak
-daar de inhoud van de bijbehorende `automation:`-items uit het package-
-bestand (één automation per keer aanmaken).
+daar de inhoud van de bijbehorende `automation:`-items uit het
+package-bestand (één automation per keer aanmaken).
 
 Let op: bij deze route moet je zelf overal de entity-namen die je bij de
 helpers hebt gekozen, laten overeenkomen met wat er in de automations en de
 sensor-template staat (Home Assistant genereert de entity_id meestal
-automatisch op basis van de naam die je invoert, bijv. "Apparaat sessie
-bezig" → `input_boolean.apparaat_sessie_bezig`).
+automatisch op basis van de naam die je invoert, bijv. "Device session
+active" → `input_boolean.device_session_active`).
 
 ---
 
 ## Dashboard-kaart
 
-Zie `dashboard-card.yaml`. Vereist de [Mushroom](https://github.com/piitaya/lovelace-mushroom)
-custom card (te installeren via HACS). Plak de inhoud in een nieuwe kaart
-via de kaart-editor (kies "Handmatig" / YAML-modus).
+Zie `dashboard-card.yaml`. Vereist de
+[Mushroom](https://github.com/piitaya/lovelace-mushroom) custom card (te
+installeren via HACS). Plak de inhoud in een nieuwe kaart via de
+kaart-editor (kies "Handmatig" / YAML-modus).
 
 ---
 
 ## Marges en instellingen aanpassen
 
-Alle "magische getallen" zitten met opzet los in het automation-bestand, met
-uitleg erbij in de comments:
+Alle "magische getallen" zitten met opzet los in het automation-bestand,
+met uitleg erbij in de comments:
 
 - Checkpoint-interval en -aantal (fijn/grof)
 - Duplicaat-marges (±5 min duur, ±10%/±0,05 kWh)
