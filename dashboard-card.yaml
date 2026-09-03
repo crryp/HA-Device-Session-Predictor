@@ -26,3 +26,29 @@ secondary: >-
   {{ states('sensor.device_remaining_time') }} min
   {% endif %}
   {% endif %}
+
+# ============================================================================
+# OPTIONAL — sessions per day (last 7 days)
+# ============================================================================
+# Uses the sensor.device_sessions_day0 .. day6 helpers from
+# device_session_predictor.yaml (day0 = today, day6 = 6 days ago). This is
+# a plain built-in "entities" card — no HACS needed. For an actual bar
+# chart, feed the same 7 sensors into an "apexcharts-card" or "bar-card".
+# ----------------------------------------------------------------------------
+type: entities
+title: Device sessions per day
+entities:
+  - entity: sensor.device_sessions_day0
+    name: Today
+  - entity: sensor.device_sessions_day1
+    name: Yesterday
+  - entity: sensor.device_sessions_day2
+    name: 2 days ago
+  - entity: sensor.device_sessions_day3
+    name: 3 days ago
+  - entity: sensor.device_sessions_day4
+    name: 4 days ago
+  - entity: sensor.device_sessions_day5
+    name: 5 days ago
+  - entity: sensor.device_sessions_day6
+    name: 6 days ago

@@ -14,13 +14,21 @@
 #   2. During a session, "checkpoints" of cumulative energy use are logged
 #      at two speeds: a fine series (early, high resolution) and a coarse
 #      series (later, low resolution, longer coverage).
-#   3. At session end, the duration + energy use + curve are saved into a
-#      small history (last N sessions).
+#   3. At session end, the duration + energy use + curve are saved: the
+#      curve into a scarce 8-slot history, the plain duration/kWh into a
+#      roomier 20-slot log.
 #   4. During a NEW session, the curve-so-far is compared against the
-#      stored curves; the closest match determines the estimate.
+#      stored curves; the closest match determines the estimate. The
+#      matched curve's "last used" timestamp is refreshed, so curves you
+#      actually rely on stay fresh.
 #   5. Near-identical sessions (same duration + energy use) are not stored
 #      as a separate curve but merged, so the limited storage doesn't fill
-#      up with 6 copies of the same program.
+#      up with 8 copies of the same program.
+#   6. When all 8 curve slots are full and a genuinely new curve arrives,
+#      one slot is evicted to make room: the shortest- and
+#      longest-duration curves are always protected (keeps the span of
+#      known programs wide), and among the rest the least-recently-used
+#      one (oldest "last used" timestamp) is dropped.
 #
 # BEFORE YOU USE THIS — change the following:
 #
@@ -50,8 +58,10 @@
 # GOOD TO KNOW (not required)
 #   - The "curves" storage uses input_text helpers with a 255-character
 #     limit. That bounds how many checkpoints x how many sessions you can
-#     keep. The defaults below (6 fine + 9 coarse checkpoints, last 6
-#     sessions) fit comfortably within that limit.
+#     keep. The defaults below (6 fine + 9 coarse checkpoints, last 8
+#     curves) still fit within that limit, but with less headroom than a
+#     6-curve history — if you push the checkpoint counts or slot count
+#     higher, keep an eye on the stored string length.
 #   - Short programs will naturally end up with fewer checkpoints (they
 #     finish before all checkpoint moments have passed) — that's not a
 #     bug, it's a useful signal ("few points = short program").
@@ -95,10 +105,20 @@ input_text:
     max: 255
     # Same idea, but kWh — belongs to the same sessions as curve_durations.
 
+  device_curve_last_used:
+    name: "Device curve last used"
+    max: 255
+    # Comma-separated Unix timestamps, one per stored curve, kept 1:1
+    # aligned with device_curve_durations / device_curve_kwh /
+    # device_session_curves(_coarse). A slot's timestamp is (re)set
+    # whenever that curve is created, overwritten, or picked as the best
+    # match for a running session. Drives the least-recently-used part of
+    # the eviction rule once all 8 curve slots are full.
+
   device_session_curves:
     name: "Device session curves"
     max: 255
-    # Last ~6 FINE curves. One curve = checkpoint values (cumulative kWh)
+    # Last ~8 FINE curves. One curve = checkpoint values (cumulative kWh)
     # separated by "|", sessions separated by ";". Example:
     #   "0.35|0.7|0.91|0.92|0.94|0.95;0.19|0.27|0.31|0.32|0.33|0.34"
     # is the fine curve of 2 sessions, each with 6 checkpoints.
@@ -121,6 +141,13 @@ input_text:
     name: "Device current curve coarse"
     max: 255
     # Same idea, but the coarse curve of the current session.
+
+counter:
+  device_session_counter:
+    name: "Device session counter"
+    # Bumped once per confirmed session start. Purely informational
+    # (total number of sessions seen since setup) — the prediction logic
+    # never reads it.
 
 # ----------------------------------------------------------------------------
 # Energy metering: power -> cumulative kWh -> kWh since session start
@@ -206,6 +233,62 @@ sensor:
           {%- endif -%}
           {%- endif -%}
 
+  # --------------------------------------------------------------------------
+  # Sessions per calendar day, last 7 days (day0 = today, day6 = 6 days
+  # ago). Not used by the prediction — handy for a dashboard bar chart of
+  # how often the appliance runs across the week. Counts how often
+  # input_boolean.device_session_active flipped to "on" inside each day.
+  # --------------------------------------------------------------------------
+  - platform: history_stats
+    name: "Device sessions day0"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ now().replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ now() }}"
+  - platform: history_stats
+    name: "Device sessions day1"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ (now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ now().replace(hour=0, minute=0, second=0, microsecond=0) }}"
+  - platform: history_stats
+    name: "Device sessions day2"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ (now() - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ (now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+  - platform: history_stats
+    name: "Device sessions day3"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ (now() - timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ (now() - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+  - platform: history_stats
+    name: "Device sessions day4"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ (now() - timedelta(days=4)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ (now() - timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+  - platform: history_stats
+    name: "Device sessions day5"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ (now() - timedelta(days=5)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ (now() - timedelta(days=4)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+  - platform: history_stats
+    name: "Device sessions day6"
+    entity_id: input_boolean.device_session_active
+    state: "on"
+    type: count
+    start: "{{ (now() - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+    end: "{{ (now() - timedelta(days=5)).replace(hour=0, minute=0, second=0, microsecond=0) }}"
+
 utility_meter:
   device_energy_session:
     name: "Device energy session"
@@ -261,6 +344,9 @@ automation:
           entity_id: input_text.device_current_curve_coarse
         data:
           value: ""
+      - action: counter.increment
+        target:
+          entity_id: counter.device_session_counter
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.device_session_active
@@ -319,11 +405,13 @@ automation:
     alias: "Device session end - update history"
     description: >-
       On a confirmed end (power below threshold, held continuously long
-      enough): compute duration + kWh, and save the curve — UNLESS this
-      is essentially identical (duration and energy use) to an
-      already-stored session (in that case the existing curve is only
-      replaced if the new curve is more complete; otherwise the curve
-      storage is left untouched).
+      enough): compute duration + kWh, append them to the roomy 20-slot
+      log, and save the curve into the scarce 8-slot storage — UNLESS
+      this is essentially identical (duration and energy use) to an
+      already-stored curve (then it's only replaced if the new curve is
+      more complete). When all 8 slots are full, one is evicted first:
+      the shortest- and longest-duration curves are protected, and the
+      least-recently-used of the rest is dropped.
     mode: single
     triggers:
       - trigger: numeric_state
@@ -376,6 +464,29 @@ automation:
         {% set coarse_expected = [ (duration_min // 20) | int, 9 ] | min %}
         {% set total_expected = [fine_expected + coarse_expected, 1] | max %}
         {{ ((fine_pts + coarse_pts) / total_expected) | round(3) }}
+      evict_index: >-
+        {# Which curve slot to overwrite when storage is full and a new,
+           distinct curve comes in. -1 = still room, just append.
+           Otherwise: never the shortest- or longest-duration curve
+           (those anchor the range of known programs); among the rest,
+           the one with the oldest "last used" timestamp (LRU). #}
+        {% set cd = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
+        {% if cd | length < 8 %}-1{% else %}
+        {% set cl_raw = states('input_text.device_curve_last_used').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
+        {% set min_idx = cd.index(cd | min) %}
+        {% set max_idx = cd.index(cd | max) %}
+        {% set ns = namespace(evict=-1, oldest=none) %}
+        {% for i in range(cd | length) %}
+        {% if i != min_idx and i != max_idx %}
+        {% set lu = cl_raw[i] if i < (cl_raw | length) else 0 %}
+        {% if ns.oldest is none or lu < ns.oldest %}
+        {% set ns.oldest = lu %}
+        {% set ns.evict = i %}
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+        {{ ns.evict }}
+        {% endif %}
     actions:
       # Duration and kWh are ALWAYS appended to the general, roomier
       # (20-slot) log — even on a duplicate. Costs nothing, and improves
@@ -398,52 +509,129 @@ automation:
             {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
             {% set lst = lst + [kwh_total | string] %}
             {{ lst[-20:] | join(',') }}
-      # The scarce curve storage (max 6 slots) only gets appended to /
-      # overwritten when it's worthwhile:
+      # The scarce curve storage (max 8 slots) only gets touched when it's
+      # worthwhile. Every list below stays 1:1 aligned (durations, kwh,
+      # fine curves, coarse curves, last-used timestamps).
       - if:
           - condition: template
             value_template: "{{ match_index | int == -1 }}"
         then:
-          # No match found -> add a new, distinct curve entry.
-          - action: input_text.set_value
-            target:
-              entity_id: input_text.device_session_curves
-            data:
-              value: >-
-                {% set cur = states('input_text.device_session_curves') %}
-                {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
-                {% set lst = lst + [states('input_text.device_current_curve')] %}
-                {{ lst[-6:] | join(';') }}
-          - action: input_text.set_value
-            target:
-              entity_id: input_text.device_session_curves_coarse
-            data:
-              value: >-
-                {% set cur = states('input_text.device_session_curves_coarse') %}
-                {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
-                {% set lst = lst + [states('input_text.device_current_curve_coarse')] %}
-                {{ lst[-6:] | join(';') }}
-          - action: input_text.set_value
-            target:
-              entity_id: input_text.device_curve_durations
-            data:
-              value: >-
-                {% set cur = states('input_text.device_curve_durations') %}
-                {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
-                {% set lst = lst + [duration_min | int | string] %}
-                {{ lst[-6:] | join(',') }}
-          - action: input_text.set_value
-            target:
-              entity_id: input_text.device_curve_kwh
-            data:
-              value: >-
-                {% set cur = states('input_text.device_curve_kwh') %}
-                {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
-                {% set lst = lst + [kwh_total | string] %}
-                {{ lst[-6:] | join(',') }}
+          # No near-identical curve stored yet.
+          - if:
+              - condition: template
+                value_template: "{{ evict_index | int == -1 }}"
+            then:
+              # Room left (< 8 curves) -> append a new slot to every
+              # aligned list, with a fresh "last used" timestamp.
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_session_curves
+                data:
+                  value: >-
+                    {% set cur = states('input_text.device_session_curves') %}
+                    {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                    {% set lst = lst + [states('input_text.device_current_curve')] %}
+                    {{ lst[-8:] | join(';') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_session_curves_coarse
+                data:
+                  value: >-
+                    {% set cur = states('input_text.device_session_curves_coarse') %}
+                    {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                    {% set lst = lst + [states('input_text.device_current_curve_coarse')] %}
+                    {{ lst[-8:] | join(';') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_durations
+                data:
+                  value: >-
+                    {% set cur = states('input_text.device_curve_durations') %}
+                    {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                    {% set lst = lst + [duration_min | int | string] %}
+                    {{ lst[-8:] | join(',') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_kwh
+                data:
+                  value: >-
+                    {% set cur = states('input_text.device_curve_kwh') %}
+                    {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                    {% set lst = lst + [kwh_total | string] %}
+                    {{ lst[-8:] | join(',') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_last_used
+                data:
+                  value: >-
+                    {% set cur = states('input_text.device_curve_last_used') %}
+                    {% set lst = (cur.split(',') if cur not in ['', 'unknown', 'unavailable'] else []) %}
+                    {% set lst = lst + [(now().timestamp() | int) | string] %}
+                    {{ lst[-8:] | join(',') }}
+            else:
+              # All 8 slots full -> overwrite the slot picked by
+              # evict_index (never the shortest/longest; otherwise the
+              # least-recently-used) in place, so every aligned list keeps
+              # the same length.
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_session_curves
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = evict_index | int %}
+                    {{ (lst[:idx] + [states('input_text.device_current_curve')] + lst[idx+1:]) | join(';') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_session_curves_coarse
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = evict_index | int %}
+                    {{ (lst[:idx] + [states('input_text.device_current_curve_coarse')] + lst[idx+1:]) | join(';') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_durations
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = evict_index | int %}
+                    {{ (lst[:idx] + [duration_min | int | string] + lst[idx+1:]) | join(',') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_kwh
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_curve_kwh').split(',') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = evict_index | int %}
+                    {{ (lst[:idx] + [kwh_total | string] + lst[idx+1:]) | join(',') }}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.device_curve_last_used
+                data:
+                  value: >-
+                    {% set lst = states('input_text.device_curve_last_used').split(',') | reject('in', ['', 'unknown','unavailable']) | list %}
+                    {% set idx = evict_index | int %}
+                    {{ (lst[:idx] + [(now().timestamp() | int) | string] + lst[idx+1:]) | join(',') }}
         else:
-          # Match found (duplicate) -> only replace if the new curve is
-          # more complete than the existing one.
+          # Near-identical curve already stored (match_index). Always
+          # refresh its "last used" stamp first, so a program you run
+          # often keeps winning the eviction contest.
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.device_curve_last_used
+            data:
+              value: >-
+                {% set lst = states('input_text.device_curve_last_used').split(',') | reject('in', ['', 'unknown','unavailable']) | list %}
+                {% set idx = match_index | int %}
+                {% if idx < (lst|length) %}
+                {% set new_lst = lst[:idx] + [(now().timestamp() | int) | string] + lst[idx+1:] %}
+                {% else %}
+                {% set new_lst = lst + [(now().timestamp() | int) | string] %}
+                {% endif %}
+                {{ new_lst | join(',') }}
+          # Then replace the stored curve only if this run captured more
+          # checkpoints than what's already there.
           - if:
               - condition: template
                 value_template: "{{ new_completeness | float > existing_completeness | float }}"
@@ -460,7 +648,7 @@ automation:
                     {% else %}
                     {% set new_lst = lst + [states('input_text.device_current_curve')] %}
                     {% endif %}
-                    {{ new_lst[-6:] | join(';') }}
+                    {{ new_lst[-8:] | join(';') }}
               - action: input_text.set_value
                 target:
                   entity_id: input_text.device_session_curves_coarse
@@ -473,7 +661,7 @@ automation:
                     {% else %}
                     {% set new_lst = lst + [states('input_text.device_current_curve_coarse')] %}
                     {% endif %}
-                    {{ new_lst[-6:] | join(';') }}
+                    {{ new_lst[-8:] | join(';') }}
               - action: input_text.set_value
                 target:
                   entity_id: input_text.device_curve_durations

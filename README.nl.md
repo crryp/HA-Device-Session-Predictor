@@ -32,21 +32,32 @@ Nederlandse uitleg erbij.
      elke 20 minuten, tot 9x (dekt tot 3 uur) — nodig om lange en
      middellange programma's uit elkaar te houden, iets waar de fijne curve
      alleen niet goed in is (die stopt na het eerste uur).
-3. **Bij sessie-einde** wordt de duur, het energieverbruik en de curve
-   opgeslagen in een kleine geschiedenis (standaard: laatste 6 curves,
-   laatste 20 duren/verbruikswaarden).
+3. **Bij sessie-einde** worden de duur, het energieverbruik en de curve
+   opgeslagen: de curve in een schaarse geschiedenis (standaard: 8
+   curves), de kale duur/verbruikswaarden in een ruimer logboek
+   (laatste 20).
 4. **Tijdens een nieuwe sessie** vergelijkt de sensor (`device_remaining_time`)
    de curve-tot-nu-toe met alle opgeslagen curves, en gebruikt de
    dichtstbijzijnde match om de resterende tijd te schatten. Loopt de sessie
    langer door dan de beste match voorspelde (met 5 minuten coulance)? Dan
-   valt de schatting terug op de een-na-beste match.
+   valt de schatting terug op de een-na-beste match. De "laatst
+   gebruikt"-tijdstempel van de gematchte curve wordt ververst, zodat
+   curves waar je echt op leunt niet worden verwijderd (zie punt 6).
 5. **Duplicaat-detectie**: een sessie die qua duur (±5 min) én
    energieverbruik (±10%, of ±0,05 kWh absoluut) sterk lijkt op een al
    opgeslagen sessie, wordt niet als nieuwe curve opgeslagen — zo raken de
-   beperkte 6 curve-plekken niet gevuld met 6x hetzelfde programma. Bij een
+   beperkte 8 curve-plekken niet gevuld met 8x hetzelfde programma. Bij een
    duplicaat wordt de bestaande curve alleen vervangen als de nieuwe curve
    *vollediger* is (meer checkpoints t.o.v. wat op basis van de duur
-   verwacht mocht worden).
+   verwacht mocht worden), en wordt de "laatst gebruikt"-tijdstempel
+   bijgewerkt.
+6. **Verwijderen bij volle opslag**: zodra alle 8 curve-plekken bezet zijn
+   en er een écht nieuwe curve binnenkomt, wordt er één plek overschreven
+   in plaats van dat de oudste er vanzelf afvalt. De curve met de kortste
+   en die met de langste duur worden altijd beschermd (die bepalen de
+   spreiding aan programma's die de voorspeller kent); van de rest wordt de
+   minst recent gebruikte curve — oudste "laatst gebruikt"-tijdstempel,
+   gezet bij aanmaak en ververst bij elke match — verwijderd.
 
 ## Bekende beperkingen
 
@@ -55,9 +66,9 @@ Nederlandse uitleg erbij.
   variatie wordt de curve-matching zinvol.
 - **255-tekens-limiet.** De curve-opslag gebruikt `input_text`-helpers
   (HA-limiet: 255 tekens). Dat begrenst hoeveel checkpoints × hoeveel
-  sessies je kunt bewaren. De standaardinstellingen (6 fijn + 9 grof,
-  laatste 6 sessies) passen ruim, maar ga je dit uitbreiden, houd de limiet
-  in de gaten.
+  sessies je kunt bewaren. De standaardinstellingen (6 fijn + 9 grof, 8
+  curves) passen nog, maar met minder marge dan een 6-curve-geschiedenis —
+  ga je dit uitbreiden, houd de limiet in de gaten.
 - **Programma's zonder duidelijke opwarmfase** (bijv. een koud programma)
   kunnen minder goed te onderscheiden zijn, omdat een groot deel van het
   onderscheidend vermogen van de fijne curve juist uit die opwarm-piek komt.
@@ -161,10 +172,12 @@ ook — het kost alleen meer klikwerk. Maak de volgende helpers aan via
 | Tekstveld (max 255) | Device session kwh |
 | Tekstveld (max 255) | Device curve durations |
 | Tekstveld (max 255) | Device curve kwh |
+| Tekstveld (max 255) | Device curve last used |
 | Tekstveld (max 255) | Device session curves |
 | Tekstveld (max 255) | Device session curves coarse |
 | Tekstveld (max 255) | Device current curve |
 | Tekstveld (max 255) | Device current curve coarse |
+| Teller | Device session counter |
 
 Maak daarnaast aan:
 - Een **Integratie-helper** ("Riemann-som") met als bron je vermogenssensor,
@@ -175,6 +188,12 @@ Maak daarnaast aan:
 - Een **Template-sensor** met de `value_template` uit
   `packages/device_session_predictor.yaml` (kopieer de hele
   `value_template:`-inhoud).
+- *(Optioneel)* Zeven **History stats-helpers** — type "count", entiteit
+  `input_boolean.device_session_active`, gevolgde status `on` — één per
+  dag, met het start/eind-venster telkens een dag verder terug. Deze voeden
+  een "sessies per dag"-grafiek op je dashboard en worden niet door de
+  voorspelling gebruikt. Kopieer de `start:`/`end:`-templates uit de
+  `history_stats`-sensoren in `packages/device_session_predictor.yaml`.
 
 Maak vervolgens de twee automations aan via **Instellingen →
 Automatiseringen → Automatisering toevoegen → In YAML bewerken**, en plak
@@ -207,7 +226,11 @@ met uitleg erbij in de comments:
 - Duplicaat-marges (±5 min duur, ±10%/±0,05 kWh)
 - Val-terug-coulance (5 minuten voordat wordt overgeschakeld naar de
   een-na-beste match)
-- Hoeveel sessies/curves bewaard blijven (standaard 20 resp. 6)
+- Hoeveel sessies/curves bewaard blijven (standaard 20 voor het kale
+  duur/kWh-logboek, 8 voor de curve-plekken)
+- Verwijder-strategie voor curves — bescherm de kortste + langste curve,
+  verwijder daarna de minst recent gebruikte van de rest (de
+  `evict_index`-variabele in de sessie-einde-automation)
 
 Pas deze gerust aan naar wat bij jouw apparaat en gebruik past — er is geen
 universeel "juist" getal, dit zijn allemaal vuistregels die tijdens de
