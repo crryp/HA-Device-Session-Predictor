@@ -35,6 +35,8 @@ works with any sensor that reports a power value in Watts.
    5-minute grace period), the estimate falls back to the second-best
    match. The matched curve's "last used" timestamp is refreshed, so
    curves you actually rely on don't get evicted (see point 6).
+   `sensor.device_match_curve` reports which curve is currently the best
+   match, for display on a dashboard.
 5. **Duplicate detection**: a session that closely resembles an
    already-stored one in both duration (±5 min) and energy use (±10%, or
    ±0.05 kWh absolute) is not stored as a new curve — this keeps the
@@ -74,7 +76,8 @@ works with any sensor that reports a power value in Watts.
 |---|---|
 | `packages/device_session_predictor.yaml` | **Required.** The core: session detection, checkpoints, curve matching, remaining-time sensor. |
 | `packages/device_ready_notification.yaml` | **Optional.** Push notification + light signal (with automatic restore of the previous light state) once a session finishes. |
-| `dashboard-card.yaml` | Example Mushroom card showing power draw + remaining time. |
+| `dashboard-card.yaml` | Compact Mushroom card (power + remaining time) that links through to the detail subview. |
+| `dashboard-subview.yaml` | Full-page detail subview: status, live chart, per-day session counts, curve history, raw data. |
 
 ---
 
@@ -177,9 +180,11 @@ Also create:
   source, unit prefix "k", unit time "h" — this gives you cumulative kWh.
 - A **Utility Meter helper** with the integration sensor you just created
   as the source, cycle "none".
-- A **Template sensor** using the `value_template` from
-  `packages/device_session_predictor.yaml` (copy the entire
-  `value_template:` contents).
+- Two **Template sensors** using the `value_template` blocks from
+  `packages/device_session_predictor.yaml`: `device_remaining_time` (the
+  ETA) and `device_match_curve` (a short label of which stored curve the
+  ETA is currently based on, e.g. "Curve #3 · ~125 min · 0.63 kWh", or
+  "No session" when idle).
 - *(Optional)* Seven **History stats helpers** — "count" type, entity
   `input_boolean.device_session_active`, tracked state `on` — one per day,
   each with its start/end window shifted a day further back. These feed a
@@ -200,12 +205,24 @@ name you enter, e.g. "Device session active" →
 
 ---
 
-## Dashboard card
+## Dashboard
 
-See `dashboard-card.yaml`. Requires the
-[Mushroom](https://github.com/piitaya/lovelace-mushroom) custom card
-(installable via HACS). Paste the contents into a new card via the card
-editor (choose "Manual" / YAML mode).
+Two files, both pasted in by hand (dashboards aren't part of the YAML
+package):
+
+- **`dashboard-card.yaml`** — a compact
+  [Mushroom](https://github.com/piitaya/lovelace-mushroom) card (needs the
+  Mushroom custom card via HACS) for your main dashboard. Shows power draw
+  and, during a session, the remaining time; tapping it navigates to the
+  detail subview. Add it via the card editor ("Manual" / YAML mode).
+- **`dashboard-subview.yaml`** — the full-page subview the card links to:
+  live status (including a "currently matching" tile that only shows while
+  a session runs), a session chart, per-day session counts, the
+  stored-curve history table, and a raw-data dump. Add it as a new view in
+  your dashboard's raw configuration editor. The "Live progress" chart
+  uses apexcharts-card (HACS); a built-in `history-graph` fallback is
+  noted inline. Give the view's `path:` and the card's `navigation_path`
+  the same value.
 
 ---
 

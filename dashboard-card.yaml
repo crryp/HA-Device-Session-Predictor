@@ -1,17 +1,24 @@
 # ============================================================================
 # Dashboard card snippet (mushroom-template-card)
 # ============================================================================
-# This does NOT automatically come along with the package — dashboards
-# (Lovelace) are stored separately from your YAML config. Paste this
-# manually into your own dashboard, or use it as a base for an existing
-# card.
+# A compact card for your main dashboard: shows current power draw, and
+# while a session runs the estimated remaining time. Tapping it opens the
+# full detail subview (see dashboard-subview.yaml).
+#
+# Dashboards (Lovelace) are stored separately from your YAML config, so
+# this does NOT come along with the package — paste it manually into your
+# own dashboard via the card editor ("Manual" / YAML mode).
 #
 # Requires the "Mushroom" custom card (via HACS: "Mushroom" by piitaya).
 #
 # BEFORE YOU USE THIS:
-#   - Replace sensor.FILL_IN_YOUR_POWER_SENSOR with your own sensor
+#   - Replace sensor.FILL_IN_YOUR_POWER_SENSOR with your own power sensor
 #   - Replace "Device" with whatever name you want displayed
 #   - Adjust the icon to taste
+#   - Set navigation_path to your detail subview. The format is
+#     /<dashboard-url-path>/<view-path>, e.g. /lovelace/subview-washer.
+#     It must match the `path:` you give the view in dashboard-subview.yaml.
+#     Remove the whole tap_action block if you don't want the click-through.
 # ============================================================================
 
 type: custom:mushroom-template-card
@@ -26,29 +33,6 @@ secondary: >-
   {{ states('sensor.device_remaining_time') }} min
   {% endif %}
   {% endif %}
-
-# ============================================================================
-# OPTIONAL — sessions per day (last 7 days)
-# ============================================================================
-# Uses the sensor.device_sessions_day0 .. day6 helpers from
-# device_session_predictor.yaml (day0 = today, day6 = 6 days ago). This is
-# a plain built-in "entities" card — no HACS needed. For an actual bar
-# chart, feed the same 7 sensors into an "apexcharts-card" or "bar-card".
-# ----------------------------------------------------------------------------
-type: entities
-title: Device sessions per day
-entities:
-  - entity: sensor.device_sessions_day0
-    name: Today
-  - entity: sensor.device_sessions_day1
-    name: Yesterday
-  - entity: sensor.device_sessions_day2
-    name: 2 days ago
-  - entity: sensor.device_sessions_day3
-    name: 3 days ago
-  - entity: sensor.device_sessions_day4
-    name: 4 days ago
-  - entity: sensor.device_sessions_day5
-    name: 5 days ago
-  - entity: sensor.device_sessions_day6
-    name: 6 days ago
+tap_action:
+  action: navigate
+  navigation_path: /lovelace/subview-device   # <-- ADJUST (see dashboard-subview.yaml `path:`)

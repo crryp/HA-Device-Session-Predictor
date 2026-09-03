@@ -43,6 +43,8 @@ Nederlandse uitleg erbij.
    valt de schatting terug op de een-na-beste match. De "laatst
    gebruikt"-tijdstempel van de gematchte curve wordt ververst, zodat
    curves waar je echt op leunt niet worden verwijderd (zie punt 6).
+   `sensor.device_match_curve` geeft weer welke curve op dit moment de
+   beste match is, om op een dashboard te tonen.
 5. **Duplicaat-detectie**: een sessie die qua duur (±5 min) én
    energieverbruik (±10%, of ±0,05 kWh absoluut) sterk lijkt op een al
    opgeslagen sessie, wordt niet als nieuwe curve opgeslagen — zo raken de
@@ -82,7 +84,8 @@ Nederlandse uitleg erbij.
 |---|---|
 | `packages/device_session_predictor.yaml` | **Verplicht.** De kern: sessiedetectie, checkpoints, curve-matching, resterende-tijd-sensor. |
 | `packages/device_ready_notification.yaml` | **Optioneel.** Push-melding + lamp-signaal (met automatisch herstel van de vorige lamp-staat) zodra een sessie is afgerond. |
-| `dashboard-card.yaml` | Voorbeeld van een Mushroom-kaart die het vermogen + de resterende tijd toont. |
+| `dashboard-card.yaml` | Compacte Mushroom-kaart (vermogen + resterende tijd) die doorklikt naar de detail-subview. |
+| `dashboard-subview.yaml` | Volledige detail-subview: status, live-grafiek, sessies per dag, curve-geschiedenis, ruwe data. |
 
 ---
 
@@ -185,9 +188,11 @@ Maak daarnaast aan:
   kWh.
 - Een **Utility Meter-helper** met als bron de zojuist gemaakte
   integratie-sensor, cyclus "geen".
-- Een **Template-sensor** met de `value_template` uit
-  `packages/device_session_predictor.yaml` (kopieer de hele
-  `value_template:`-inhoud).
+- Twee **Template-sensoren** met de `value_template`-blokken uit
+  `packages/device_session_predictor.yaml`: `device_remaining_time` (de
+  schatting) en `device_match_curve` (een kort label van welke opgeslagen
+  curve die schatting nu gebruikt, bijv. "Curve #3 · ~125 min · 0.63
+  kWh", of "No session" als er niks draait).
 - *(Optioneel)* Zeven **History stats-helpers** — type "count", entiteit
   `input_boolean.device_session_active`, gevolgde status `on` — één per
   dag, met het start/eind-venster telkens een dag verder terug. Deze voeden
@@ -208,12 +213,25 @@ active" → `input_boolean.device_session_active`).
 
 ---
 
-## Dashboard-kaart
+## Dashboard
 
-Zie `dashboard-card.yaml`. Vereist de
-[Mushroom](https://github.com/piitaya/lovelace-mushroom) custom card (te
-installeren via HACS). Plak de inhoud in een nieuwe kaart via de
-kaart-editor (kies "Handmatig" / YAML-modus).
+Twee bestanden, beide met de hand te plakken (dashboards horen niet bij de
+YAML-package):
+
+- **`dashboard-card.yaml`** — een compacte
+  [Mushroom](https://github.com/piitaya/lovelace-mushroom)-kaart (vereist
+  de Mushroom custom card via HACS) voor je hoofddashboard. Toont het
+  vermogen en, tijdens een sessie, de resterende tijd; erop tikken opent
+  de detail-subview. Toevoegen via de kaart-editor ("Handmatig" /
+  YAML-modus).
+- **`dashboard-subview.yaml`** — de volledige subview waar de kaart naar
+  linkt: live status (met een "nu gematcht met"-tegel die alleen tijdens
+  een sessie verschijnt), een sessie-grafiek, sessies per dag, de
+  curve-geschiedenistabel en een ruwe-data-overzicht. Toevoegen als
+  nieuwe view via de "raw configuration editor" van je dashboard. De
+  "Live progress"-grafiek gebruikt apexcharts-card (HACS); een ingebouwde
+  `history-graph` als alternatief staat in de comments. Geef de `path:`
+  van de view en de `navigation_path` van de kaart dezelfde waarde.
 
 ---
 

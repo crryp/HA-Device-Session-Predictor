@@ -233,6 +233,80 @@ sensor:
           {%- endif -%}
           {%- endif -%}
 
+      # Which stored curve the remaining-time sensor is currently matching
+      # against — same scoring loop as device_remaining_time, but it
+      # reports the matched slot (index + its duration/kWh) instead of the
+      # ETA. Reads "No session" when idle, so a dashboard tile can be
+      # shown only while a session runs.
+      device_match_curve:
+        friendly_name: "Device match curve"
+        icon_template: mdi:target-variant
+        value_template: >-
+          {% set active = is_state('input_boolean.device_session_active', 'on') %}
+          {%- if not active -%}
+          No session
+          {%- else -%}
+          {%- set cur_coarse = states('input_text.device_current_curve_coarse').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set curves_coarse = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
+          {%- set cur_fine = states('input_text.device_current_curve').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set curves_fine = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
+          {%- set curve_durs = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set curve_kwh = states('input_text.device_curve_kwh').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set ts = state_attr('input_datetime.device_session_start', 'timestamp') -%}
+          {%- set elapsed = ((now().timestamp() - ts) / 60) if ts is not none else 0 -%}
+          {%- set n_fine = curves_fine | length -%}
+          {%- set n_coarse = curves_coarse | length -%}
+          {%- if n_fine == 0 or (cur_fine | length == 0 and cur_coarse | length == 0) -%}
+          No match yet
+          {%- else -%}
+          {%- set coarse_offset = n_fine - n_coarse -%}
+          {%- set ns = namespace(best_score=none, best_i=0, second_score=none, second_i=none) -%}
+          {%- for i in range(n_fine) -%}
+          {%- set score = namespace(v=0, has_any=false) -%}
+          {%- if cur_fine | length > 0 -%}
+          {%- set hist_fine = curves_fine[i].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set nA = [cur_fine|length, hist_fine|length] | min -%}
+          {%- if nA > 0 -%}
+          {%- set fd = namespace(v=0) -%}
+          {%- for j in range(nA) -%}{%- set fd.v = fd.v + (cur_fine[j]-hist_fine[j])|abs -%}{%- endfor -%}
+          {%- set score.v = score.v + fd.v -%}
+          {%- set score.has_any = true -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- if cur_coarse | length > 0 and i >= coarse_offset -%}
+          {%- set hist_coarse = curves_coarse[i - coarse_offset].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- set nB = [cur_coarse|length, hist_coarse|length] | min -%}
+          {%- if nB > 0 -%}
+          {%- set cd = namespace(v=0) -%}
+          {%- for j in range(nB) -%}{%- set cd.v = cd.v + (cur_coarse[j]-hist_coarse[j])|abs -%}{%- endfor -%}
+          {%- set score.v = score.v + cd.v -%}
+          {%- set score.has_any = true -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- if score.has_any -%}
+          {%- if ns.best_score is none or score.v < ns.best_score -%}
+          {%- set ns.second_score = ns.best_score -%}
+          {%- set ns.second_i = ns.best_i -%}
+          {%- set ns.best_score = score.v -%}
+          {%- set ns.best_i = i -%}
+          {%- elif ns.second_score is none or score.v < ns.second_score -%}
+          {%- set ns.second_score = score.v -%}
+          {%- set ns.second_i = i -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- if ns.best_score is none -%}
+          No match yet
+          {%- else -%}
+          {%- set fallback = (ns.second_i is not none and elapsed > (curve_durs[ns.best_i] + 5)) -%}
+          {%- set idx = ns.second_i if fallback else ns.best_i -%}
+          {%- set d = curve_durs[idx] | round(0) | int -%}
+          {%- set k = (curve_kwh[idx] | round(2)) if idx < (curve_kwh | length) else none -%}
+          Curve #{{ idx + 1 }} · ~{{ d }} min{% if k is not none %} · {{ k }} kWh{% endif %}{% if fallback %} (fallback){% endif %}
+          {%- endif -%}
+          {%- endif -%}
+          {%- endif -%}
+
   # --------------------------------------------------------------------------
   # Sessions per calendar day, last 7 days (day0 = today, day6 = 6 days
   # ago). Not used by the prediction — handy for a dashboard bar chart of

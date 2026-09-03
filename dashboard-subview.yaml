@@ -1,0 +1,203 @@
+# ============================================================================
+# Detail subview for one appliance (example: washing machine)
+# ============================================================================
+# The full-page view that the Mushroom card in dashboard-card.yaml links to
+# via its tap_action. It shows live status, the session-so-far chart, a
+# per-day session count, the stored curve history, and a raw-data dump.
+#
+# Dashboards are NOT part of the HA package config, so add this by hand:
+#   Settings -> Dashboards -> (your dashboard) -> Edit (pencil) ->
+#   three-dots menu -> "Raw configuration editor", and paste this block as
+#   a new entry in the top-level `views:` list.
+# Or, without the raw editor: add a new view in the UI, open its settings
+# and enable the "Subview" toggle, then paste just the `sections:` block
+# via the view's YAML editor.
+#
+# BEFORE YOU USE THIS:
+#   1. Replace sensor.FILL_IN_YOUR_POWER_SENSOR with your power sensor
+#      (same one as in device_session_predictor.yaml).
+#   2. Replace "Device" / "device_" everywhere with your appliance's short
+#      name, matching the entity names in device_session_predictor.yaml
+#      (e.g. "Washer" / "washer_"). sensor.device_energy_session and the
+#      other sensor.device_* / input_*.device_* names come straight from
+#      that package.
+#   3. Set `path:` here and the Mushroom card's navigation_path to the same
+#      value (format: /<dashboard-url-path>/<path>, e.g. /lovelace/subview-washer).
+#   4. The "Live progress" section uses apexcharts-card (HACS). No HACS?
+#      Delete that section, or replace the custom:apexcharts-card card with
+#      the built-in history-graph shown in the comment there.
+#   5. The optional per-day section needs the sensor.device_sessions_day0..6
+#      history_stats sensors from device_session_predictor.yaml. Drop the
+#      section if you didn't create them.
+# ============================================================================
+
+title: Device
+path: subview-device            # <-- ADJUST (must match the card's navigation_path)
+type: sections
+subview: true
+icon: mdi:washing-machine
+max_columns: 1
+sections:
+  # --------------------------------------------------------------------------
+  # Live status
+  # --------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Status
+        heading_style: subtitle
+        icon: mdi:washing-machine
+      - type: tile
+        entity: input_boolean.device_session_active
+        name: Session active
+        grid_options:
+          columns: 6
+      - type: tile
+        entity: sensor.device_remaining_time
+        name: Remaining time
+        grid_options:
+          columns: 6
+      # Which stored curve the estimate is based on right now. `visibility`
+      # keeps this tile hidden unless a session is actually running.
+      - type: tile
+        entity: sensor.device_match_curve
+        name: Currently matching
+        icon: mdi:target-variant
+        grid_options:
+          columns: 12
+        visibility:
+          - condition: state
+            entity: input_boolean.device_session_active
+            state: "on"
+      - type: tile
+        entity: sensor.FILL_IN_YOUR_POWER_SENSOR
+        name: Current power
+        grid_options:
+          columns: 6
+      - type: tile
+        entity: sensor.device_energy_session
+        name: Energy this session
+        grid_options:
+          columns: 6
+
+  # --------------------------------------------------------------------------
+  # Session-so-far chart (optional, needs apexcharts-card from HACS)
+  # --------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Live progress (last 6 h)
+        heading_style: subtitle
+        icon: mdi:chart-line
+      # No apexcharts-card? Replace this whole card with:
+      #   - type: history-graph
+      #     hours_to_show: 6
+      #     entities:
+      #       - sensor.FILL_IN_YOUR_POWER_SENSOR
+      #       - sensor.device_energy_session
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: Power & session energy
+        graph_span: 6h
+        series:
+          - entity: sensor.FILL_IN_YOUR_POWER_SENSOR
+            name: Power (W)
+            type: line
+            stroke_width: 2
+            yaxis_id: watt
+          - entity: sensor.device_energy_session
+            name: Session energy (kWh)
+            type: line
+            stroke_width: 2
+            yaxis_id: kwh
+        yaxis:
+          - id: kwh
+            decimals: 2
+            min: 0
+          - id: watt
+            opposite: true
+            decimals: 0
+        grid_options:
+          columns: full
+          rows: auto
+
+  # --------------------------------------------------------------------------
+  # Sessions per day, last 7 days (optional, needs the history_stats sensors)
+  # --------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Sessions last 7 days
+        heading_style: subtitle
+        icon: mdi:calendar-week
+      - type: markdown
+        content: >-
+          {% set days = [
+            ('6 days ago', states('sensor.device_sessions_day6')),
+            ('5 days ago', states('sensor.device_sessions_day5')),
+            ('4 days ago', states('sensor.device_sessions_day4')),
+            ('3 days ago', states('sensor.device_sessions_day3')),
+            ('2 days ago', states('sensor.device_sessions_day2')),
+            ('Yesterday',  states('sensor.device_sessions_day1')),
+            ('Today',      states('sensor.device_sessions_day0')),
+          ] %}
+          {% for label, count in days %}**{{ label }}**: {{ '🟦' * (count | int(0)) }} ({{ count }})
+
+          {% endfor %}
+
+  # --------------------------------------------------------------------------
+  # Stored curve history (# = slot position, same numbering as the
+  # "Currently matching" tile)
+  # --------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: History (stored curves)
+        heading_style: subtitle
+        icon: mdi:chart-bar
+      - type: markdown
+        content: >-
+          {% set durs = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown', 'unavailable']) | list %}
+          {% set kwhs = states('input_text.device_curve_kwh').split(',') | reject('in', ['', 'unknown', 'unavailable']) | list %}
+          {% set used = states('input_text.device_curve_last_used').split(',') | reject('in', ['', 'unknown', 'unavailable']) | list %}
+          {% if durs | length == 0 %}
+          No sessions stored yet.
+          {% else %}
+          | # | Duration (min) | Energy (kWh) | Last used |
+          |---|---|---|---|
+          {% for i in range(durs | length) %}| {{ i + 1 }} | {{ durs[i] }} | {{ kwhs[i] if i < kwhs | length else '-' }} | {{ (used[i] | int | timestamp_custom('%d-%m %H:%M', true)) if i < used | length else '-' }} |
+          {% endfor %}{% endif %}
+
+  # --------------------------------------------------------------------------
+  # Raw data (read-only) — the input_text helpers behind everything above
+  # --------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Raw data (read-only)
+        heading_style: subtitle
+        icon: mdi:database-search
+      - type: markdown
+        content: >-
+          **Session start:** {{ states('input_datetime.device_session_start') }}
+
+          **Session counter:** {{ states('counter.device_session_counter') }}
+
+          **Session durations:** {{ states('input_text.device_session_durations') }}
+
+          **Session kWh:** {{ states('input_text.device_session_kwh') }}
+
+          **Curve durations:** {{ states('input_text.device_curve_durations') }}
+
+          **Curve kWh:** {{ states('input_text.device_curve_kwh') }}
+
+          **Curve last used:** {{ states('input_text.device_curve_last_used') }}
+
+          **Current curve (fine):** {{ states('input_text.device_current_curve') }}
+
+          **Current curve (coarse):** {{ states('input_text.device_current_curve_coarse') }}
+
+          **Session curves (fine):** {{ states('input_text.device_session_curves') }}
+
+          **Session curves (coarse):** {{ states('input_text.device_session_curves_coarse') }}
