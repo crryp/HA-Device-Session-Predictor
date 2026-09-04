@@ -83,7 +83,7 @@ Nederlandse uitleg erbij.
 | Bestand | Wat |
 |---|---|
 | `packages/device_session_predictor.yaml` | **Verplicht.** De kern: sessiedetectie, checkpoints, curve-matching, resterende-tijd-sensor. |
-| `packages/device_ready_notification.yaml` | **Optioneel.** Push-melding + lamp-signaal (met automatisch herstel van de vorige lamp-staat) zodra een sessie is afgerond. |
+| `packages/device_ready_notification.yaml` | **Optioneel.** Push-melding + tijdelijk lamp-signaal zodra een sessie is afgerond, met daarna een deterministisch herstel (je ruststand-scene als de lamp aan hoort te staan, anders uit). |
 | `dashboard-card.yaml` | Compacte Mushroom-kaart (vermogen + resterende tijd) die doorklikt naar de detail-subview. |
 | `dashboard-subview.yaml` | Volledige detail-subview: status, live-grafiek, sessies per dag, curve-geschiedenis, ruwe data. |
 
@@ -156,8 +156,12 @@ nieuwe automations er staan en ingeschakeld zijn.
 Wil je ook een push-melding (en optioneel een lamp-signaal) zodra een
 sessie klaar is? Herhaal stap 2-4 met
 `packages/device_ready_notification.yaml`, en vul daarin je eigen
-notify-service en lamp(en) in (of verwijder de lamp-stappen als je alleen
-de melding wilt).
+notify-service, de signaallamp en een ruststand-scene voor die lamp in
+(hoe de lamp eruitziet zodra hij normaal aan staat). De signaalkleur
+blijft maximaal 20 minuten staan (of tot je op de melding tikt), daarna
+gaat de lamp deterministisch terug — ruststand-scene als hij aan hoort te
+staan, anders uit. Verwijder de lamp-stappen als je alleen de melding
+wilt.
 
 ---
 

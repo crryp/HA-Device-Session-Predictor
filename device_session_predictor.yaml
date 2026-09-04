@@ -757,3 +757,17 @@ automation:
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.device_session_active
+      # Reset the session energy meter back to 0 now that everything
+      # above has been stored. Kept as the very LAST action: all the
+      # storage steps use the `kwh_total` variable (rendered once at
+      # trigger time), not a live read, so zeroing here can't affect
+      # them. Without this the meter would keep displaying the last
+      # session's total until the next session start calibrates it —
+      # which leaves an ugly flat tail in the session-energy chart on
+      # the dashboard. The next start still calibrates to 0 as well, so
+      # this is just a redundant early reset, not a behavior change.
+      - action: utility_meter.calibrate
+        target:
+          entity_id: sensor.device_energy_session
+        data:
+          value: 0

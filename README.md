@@ -75,7 +75,7 @@ works with any sensor that reports a power value in Watts.
 | File | What |
 |---|---|
 | `packages/device_session_predictor.yaml` | **Required.** The core: session detection, checkpoints, curve matching, remaining-time sensor. |
-| `packages/device_ready_notification.yaml` | **Optional.** Push notification + light signal (with automatic restore of the previous light state) once a session finishes. |
+| `packages/device_ready_notification.yaml` | **Optional.** Push notification + timed light signal once a session finishes, then a deterministic restore (your resting scene if the light should be on, otherwise off). |
 | `dashboard-card.yaml` | Compact Mushroom card (power + remaining time) that links through to the detail subview. |
 | `dashboard-subview.yaml` | Full-page detail subview: status, live chart, per-day session counts, curve history, raw data. |
 
@@ -149,8 +149,12 @@ are there and enabled.
 
 Want a push notification (and optionally a light signal) once a session is
 done? Repeat steps 2-4 with `packages/device_ready_notification.yaml`,
-filling in your own notify service and light(s) (or remove the light steps
-if you only want the notification).
+filling in your own notify service, the signal light, and a resting scene
+for that light (what it should look like whenever it is normally on). The
+signal colour is held for up to 20 minutes (or until you tap the
+notification), then the light is put back deterministically — resting
+scene if it should be on, otherwise off. Remove the light steps if you
+only want the notification.
 
 ---
 

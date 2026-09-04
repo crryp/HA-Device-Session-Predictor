@@ -4,53 +4,85 @@
 # Builds on device_session_predictor.yaml — that file is required.
 #
 # Sends a push notification once a session has finished, and can optionally
-# flash a light in a signal color (e.g. green = done) which is then restored
-# to EXACTLY the state it was in right before the color change — whether
-# that was "off", or "on with a particular color/brightness".
+# put a light in a signal color (e.g. green = done) for up to 20 minutes
+# (or until you tap the notification, or until someone switches the light
+# themselves). Afterwards the light is put back to a DETERMINISTIC resting
+# state:
+#   - it was on when the session ended        -> your resting scene
+#   - it was off, and nobody touched it       -> off
+#   - somebody switched it on during the wait -> your resting scene
 #
-# That restore happens via the native `scene.create` service: it captures
-# the current state of the given light(s) into a temporary scene, which you
-# can later restore exactly with `scene.turn_on`. No guessing based on
-# another light, and no extra scripts needed.
+# WHY NOT scene.create / snapshot?
+#   An earlier version snapshotted the light with `scene.create` and
+#   restored that. Two problems made it unreliable:
+#     1. Gradient lamps (Hue Signe, gradient strips) expose only ONE color
+#        to Home Assistant, so the snapshot flattened them — the restore
+#        lost the gradient.
+#     2. `light.turn_off` does not clear a bulb's color. After the signal
+#        the bulb's "last color" stayed green, so the next plain "on"
+#        (Google, wall switch, another automation) came back green.
+#   This version fixes both: it restores by activating a real scene (which
+#   sets a gradient lamp correctly), and on EVERY exit it re-asserts that
+#   scene first — so the signal color is never left as the bulb's last
+#   color — before optionally turning the light back off.
+#
+# WHY THE repeat/until LOOP around the wait?
+#   A gradient lamp keeps reporting small color corrections for 10-60 s
+#   after you set it (the zones settle). Each report is a state change on
+#   the light, which would end a plain `wait_for_trigger` early and cut
+#   the signal short. The loop re-arms the wait and only really exits on:
+#   the Ok tap, the 20-minute deadline, or a state change that carries a
+#   context.user_id (a genuine action from Google / the app / a dashboard;
+#   the lamp's own trailing reports have no user_id).
 #
 # BEFORE YOU USE THIS:
 #   1. Make sure device_session_predictor.yaml is active (this file uses
 #      input_boolean.device_session_active from it).
 #   2. Fill in your own notify service (search "FILL_IN").
-#   3. Fill in the light(s) you want to include in the signal color — or
-#      remove the light steps entirely if you only want the push
-#      notification, without a light effect.
-#   4. Adjust the signal color (rgb_color/brightness_pct) to taste.
+#   3. Fill in the light for the signal color. Use a light GROUP entity if
+#      you want to signal on several lamps at once.
+#   4. Fill in the resting scene: what the light should look like whenever
+#      it is normally on (e.g. a Hue "Relax" scene). A gradient lamp only
+#      comes back correctly if this is a real scene that includes it.
+#      Hue + gradient lamp: swap `scene.turn_on` in step 6 for
+#      `hue.activate_scene` (same target) so the multi-zone gradient is
+#      set correctly.
+#   5. Adjust the signal color (rgb_color/brightness_pct) to taste.
 # ============================================================================
 
 automation:
   - id: device_ready_notification
     alias: "Device ready notification"
     description: >-
-      Sets light(s) to a signal color, sends a notification with a
-      confirmation button, waits a while for the tap, and then restores
-      the light(s) to their state from right before the notification.
-    mode: single
+      Sets a light to a signal color, sends a notification with a
+      confirmation button, waits up to 20 minutes for the tap (or for
+      someone to switch the light themselves), and then restores the
+      light to a deterministic resting state: the resting scene if it
+      should be on, otherwise off. The resting scene is always re-applied
+      first so the signal color is never left behind on the bulb.
+    mode: restart
+    variables:
+      # Was the signal light already on when the session ended? And when
+      # does the 20-minute window end? Both captured once, at the start.
+      was_on: "{{ is_state('light.FILL_IN_YOUR_LIGHT', 'on') }}"   # <-- ADJUST
+      window_end: "{{ now().timestamp() + 1200 }}"
     triggers:
       - trigger: state
         entity_id: input_boolean.device_session_active
         to: "off"
     actions:
-      # 1. Snapshot the current light state, BEFORE we change it.
-      - action: scene.create
-        data:
-          scene_id: device_before_ready_notification
-          snapshot_entities:
-            - light.FILL_IN_YOUR_LIGHT   # <-- ADJUST (multiple lights: add more lines)
-
-      # 2. Set the signal color. Remove this step if you don't want a light effect.
+      # 1. Signal color. Remove this + the restore block if you only want
+      #    the push notification without a light effect.
       - action: light.turn_on
         target:
-          entity_id:
-            - light.FILL_IN_YOUR_LIGHT   # <-- ADJUST
+          entity_id: light.FILL_IN_YOUR_LIGHT   # <-- ADJUST
         data:
           rgb_color: [0, 255, 0]   # <-- ADJUST: signal color (here: green)
           brightness_pct: 50
+
+      # 2. Let the light settle a little before the wait starts listening.
+      - delay:
+          seconds: 2
 
       # 3. Notification with a confirmation button.
       - action: notify.FILL_IN_YOUR_NOTIFY_SERVICE   # <-- ADJUST, e.g. notify.mobile_app_my_phone
@@ -61,16 +93,62 @@ automation:
               - action: "device_ready_ok"
                 title: "Ok"
 
-      # 4. Wait for confirmation (or proceed automatically after 20 min).
-      - wait_for_trigger:
-          - trigger: event
-            event_type: mobile_app_notification_action
-            event_data:
-              action: "device_ready_ok"
-        timeout:
-          minutes: 20
+      # 4. Wait for: the Ok tap, OR a genuine manual change to the light,
+      #    OR the 20-minute deadline. The loop ignores the gradient lamp's
+      #    own trailing color reports (no context.user_id) and keeps
+      #    waiting for the remaining time.
+      - repeat:
+          sequence:
+            - wait_for_trigger:
+                - trigger: event
+                  event_type: mobile_app_notification_action
+                  event_data:
+                    action: "device_ready_ok"
+                  id: ok
+                - trigger: state
+                  entity_id: light.FILL_IN_YOUR_LIGHT   # <-- ADJUST (same as above)
+                  id: override
+              timeout:
+                seconds: "{{ [ (window_end - now().timestamp()) | int, 0 ] | max }}"
+              continue_on_timeout: true
+          until:
+            - "{{ not wait.completed
+                  or wait.trigger.id == 'ok'
+                  or wait.trigger.to_state.context.user_id is not none }}"
 
-      # 5. Restore the light(s) to their original state.
+      # 5. Decide the end state. "On" only counts if the light was on
+      #    before, or a person genuinely switched it on during the wait —
+      #    not because step 1 made it the signal color.
+      - variables:
+          should_be_on: >-
+            {{ is_state('light.FILL_IN_YOUR_LIGHT', 'on')
+               and (was_on or (wait.completed and wait.trigger is not none
+                               and wait.trigger.id == 'override'
+                               and wait.trigger.to_state.context.user_id is not none)) }}
+
+      # 6. Restore. Re-apply the resting scene on EVERY exit path (this is
+      #    what guarantees the signal color is never left behind on the
+      #    bulb), then turn the light back off if it should be off.
+      #    Hue + gradient lamp: use `hue.activate_scene` here instead
+      #    (add `dynamic: true` in data if your resting scene is a dynamic
+      #    Hue scene).
+      #
+      #    The turn-off has NO transition on purpose: a fade-to-off ramps
+      #    brightness toward 0, and some bulbs then remember ~0 as their
+      #    last "on" level — so the next plain "on" comes up almost dark.
+      #    An instant off leaves the resting scene's brightness intact for
+      #    next time.
       - action: scene.turn_on
         target:
-          entity_id: scene.device_before_ready_notification
+          entity_id: scene.FILL_IN_YOUR_RESTING_SCENE   # <-- ADJUST
+        data:
+          transition: 1.5
+      - if:
+          - condition: template
+            value_template: "{{ not should_be_on }}"
+        then:
+          - delay:
+              seconds: 2
+          - action: light.turn_off
+            target:
+              entity_id: light.FILL_IN_YOUR_LIGHT   # <-- ADJUST
