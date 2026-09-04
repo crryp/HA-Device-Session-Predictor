@@ -26,14 +26,22 @@ works with any sensor that reports a power value in Watts.
    - **Coarse**: every 20 minutes, up to 9x (covers up to 3 hours) — needed
      to tell long and medium-length programs apart, something the fine
      curve alone isn't good at (it stops after the first hour).
+
+   The fine and coarse curve lists are kept strictly 1:1 (one slot per
+   stored curve, same order). A run too short to log any coarse checkpoint
+   stores a literal `-` placeholder so the slot still exists — the matcher
+   pairs `curves_coarse[i]` with `curves_fine[i]` directly.
 3. **At session end**, the duration, energy use, and curve are saved: the
    curve into a scarce history (default: 8 curves), the plain
    duration/energy values into a roomier log (last 20).
 4. **During a new session**, the sensor compares the curve-so-far against
    all stored curves, and uses the closest match to estimate the remaining
-   time. If the session runs longer than the best match predicted (with a
-   5-minute grace period), the estimate falls back to the second-best
-   match. The matched curve's "last used" timestamp is refreshed, so
+   time. The distance is the mean absolute error per series (fine and
+   coarse each normalised by their own overlap count, then averaged), so a
+   curve scored on both fine and coarse points isn't penalised against one
+   scored on fewer points. If the session runs longer than the best match
+   predicted (with a 5-minute grace period), the estimate falls back to the
+   second-best match. The matched curve's "last used" timestamp is refreshed, so
    curves you actually rely on don't get evicted (see point 6).
    `sensor.device_match_curve` reports which curve is currently the best
    match, for display on a dashboard.

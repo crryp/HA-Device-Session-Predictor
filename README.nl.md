@@ -32,15 +32,25 @@ Nederlandse uitleg erbij.
      elke 20 minuten, tot 9x (dekt tot 3 uur) — nodig om lange en
      middellange programma's uit elkaar te houden, iets waar de fijne curve
      alleen niet goed in is (die stopt na het eerste uur).
+
+   De fijne en grove curve-lijsten blijven strikt 1-op-1 (één slot per
+   opgeslagen curve, zelfde volgorde). Een run die te kort was voor een
+   grof checkpoint slaat een letterlijke `-` op als plaatshouder, zodat de
+   slot blijft bestaan — de matcher koppelt `curves_coarse[i]` direct aan
+   `curves_fine[i]`.
 3. **Bij sessie-einde** worden de duur, het energieverbruik en de curve
    opgeslagen: de curve in een schaarse geschiedenis (standaard: 8
    curves), de kale duur/verbruikswaarden in een ruimer logboek
    (laatste 20).
 4. **Tijdens een nieuwe sessie** vergelijkt de sensor (`device_remaining_time`)
    de curve-tot-nu-toe met alle opgeslagen curves, en gebruikt de
-   dichtstbijzijnde match om de resterende tijd te schatten. Loopt de sessie
-   langer door dan de beste match voorspelde (met 5 minuten coulance)? Dan
-   valt de schatting terug op de een-na-beste match. De "laatst
+   dichtstbijzijnde match om de resterende tijd te schatten. De afstand is
+   de gemiddelde absolute afwijking per reeks (fijn en grof elk genormaliseerd
+   op hun eigen aantal overlappende punten, daarna gemiddeld), zodat een
+   curve die op fijn én grof wordt gescoord niet benadeeld wordt tegenover
+   een die op minder punten wordt gescoord. Loopt de sessie langer door dan
+   de beste match voorspelde (met 5 minuten coulance)? Dan valt de schatting
+   terug op de een-na-beste match. De "laatst
    gebruikt"-tijdstempel van de gematchte curve wordt ververst, zodat
    curves waar je echt op leunt niet worden verwijderd (zie punt 6).
    `sensor.device_match_curve` geeft weer welke curve op dit moment de

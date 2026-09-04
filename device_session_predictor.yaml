@@ -130,6 +130,12 @@ input_text:
     # checkpoints, longer coverage — important for telling long and
     # medium-length programs apart, something the fine curve alone often
     # can't do because it stops recording after the first hour).
+    # Kept strictly 1:1 with device_session_curves: exactly one ";" slot
+    # per stored curve, in the same order. A run that logged no coarse
+    # checkpoint (too short) is stored as a literal "-" so the slot still
+    # exists — the matcher pairs curves_coarse[i] with curves_fine[i]
+    # directly and would misattribute every later curve if a slot were
+    # dropped instead.
 
   device_current_curve:
     name: "Device current curve"
@@ -178,48 +184,53 @@ sensor:
           90
           {%- else -%}
           {%- set cur_coarse = states('input_text.device_current_curve_coarse').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
-          {%- set curves_coarse = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
+          {# coarse curves stay positionally 1:1 with the fine curves (one slot per
+             stored curve, "-" where a run logged no coarse checkpoint) — so do NOT
+             drop empty slots here, index them directly as curves_coarse[i]. #}
+          {%- set curves_coarse = states('input_text.device_session_curves_coarse').split(';') | list -%}
           {%- set cur_fine = states('input_text.device_current_curve').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
           {%- set curves_fine = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
           {%- set curve_durs = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
           {%- set n_fine = curves_fine | length -%}
-          {%- set n_coarse = curves_coarse | length -%}
           {%- if n_fine == 0 or (cur_fine | length == 0 and cur_coarse | length == 0) -%}
           {{ [((durs | sum / durs | length) - elapsed), 0] | max | round(0) }}
           {%- else -%}
-          {%- set coarse_offset = n_fine - n_coarse -%}
           {%- set aligned_durs = curve_durs -%}
           {%- set ns = namespace(best_score=none, best_dur=aligned_durs[0], second_score=none, second_dur=none) -%}
           {%- for i in range(n_fine) -%}
-          {%- set score = namespace(v=0, has_any=false) -%}
+          {%- set score = namespace(fine=none, coarse=none, has_any=false) -%}
           {%- if cur_fine | length > 0 -%}
           {%- set hist_fine = curves_fine[i].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
           {%- set nA = [cur_fine|length, hist_fine|length] | min -%}
           {%- if nA > 0 -%}
           {%- set fd = namespace(v=0) -%}
           {%- for j in range(nA) -%}{%- set fd.v = fd.v + (cur_fine[j]-hist_fine[j])|abs -%}{%- endfor -%}
-          {%- set score.v = score.v + fd.v -%}
+          {%- set score.fine = fd.v / nA -%}
           {%- set score.has_any = true -%}
           {%- endif -%}
           {%- endif -%}
-          {%- if cur_coarse | length > 0 and i >= coarse_offset -%}
-          {%- set hist_coarse = curves_coarse[i - coarse_offset].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- if cur_coarse | length > 0 and i < (curves_coarse | length) -%}
+          {%- set hist_coarse = curves_coarse[i].split('|') | reject('in', ['', 'unknown','unavailable', '-']) | map('float') | list -%}
           {%- set nB = [cur_coarse|length, hist_coarse|length] | min -%}
           {%- if nB > 0 -%}
           {%- set cd = namespace(v=0) -%}
           {%- for j in range(nB) -%}{%- set cd.v = cd.v + (cur_coarse[j]-hist_coarse[j])|abs -%}{%- endfor -%}
-          {%- set score.v = score.v + cd.v -%}
+          {%- set score.coarse = cd.v / nB -%}
           {%- set score.has_any = true -%}
           {%- endif -%}
           {%- endif -%}
           {%- if score.has_any -%}
-          {%- if ns.best_score is none or score.v < ns.best_score -%}
+          {# combined distance = mean of the per-series mean-abs-errors, so a curve
+             scored on fine+coarse is not penalised for having more comparison points
+             than one scored on fine only. #}
+          {%- set sv = ((score.fine + score.coarse) / 2) if (score.fine is not none and score.coarse is not none) else (score.fine if score.fine is not none else score.coarse) -%}
+          {%- if ns.best_score is none or sv < ns.best_score -%}
           {%- set ns.second_score = ns.best_score -%}
           {%- set ns.second_dur = ns.best_dur -%}
-          {%- set ns.best_score = score.v -%}
+          {%- set ns.best_score = sv -%}
           {%- set ns.best_dur = aligned_durs[i] -%}
-          {%- elif ns.second_score is none or score.v < ns.second_score -%}
-          {%- set ns.second_score = score.v -%}
+          {%- elif ns.second_score is none or sv < ns.second_score -%}
+          {%- set ns.second_score = sv -%}
           {%- set ns.second_dur = aligned_durs[i] -%}
           {%- endif -%}
           {%- endif -%}
@@ -247,7 +258,9 @@ sensor:
           No session
           {%- else -%}
           {%- set cur_coarse = states('input_text.device_current_curve_coarse').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
-          {%- set curves_coarse = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
+          {# coarse curves stay positionally 1:1 with the fine curves — keep every
+             slot ("-" = no coarse checkpoint for that run), index as curves_coarse[i]. #}
+          {%- set curves_coarse = states('input_text.device_session_curves_coarse').split(';') | list -%}
           {%- set cur_fine = states('input_text.device_current_curve').split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
           {%- set curves_fine = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list -%}
           {%- set curve_durs = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
@@ -255,42 +268,44 @@ sensor:
           {%- set ts = state_attr('input_datetime.device_session_start', 'timestamp') -%}
           {%- set elapsed = ((now().timestamp() - ts) / 60) if ts is not none else 0 -%}
           {%- set n_fine = curves_fine | length -%}
-          {%- set n_coarse = curves_coarse | length -%}
           {%- if n_fine == 0 or (cur_fine | length == 0 and cur_coarse | length == 0) -%}
           No match yet
           {%- else -%}
-          {%- set coarse_offset = n_fine - n_coarse -%}
           {%- set ns = namespace(best_score=none, best_i=0, second_score=none, second_i=none) -%}
           {%- for i in range(n_fine) -%}
-          {%- set score = namespace(v=0, has_any=false) -%}
+          {%- set score = namespace(fine=none, coarse=none, has_any=false) -%}
           {%- if cur_fine | length > 0 -%}
           {%- set hist_fine = curves_fine[i].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
           {%- set nA = [cur_fine|length, hist_fine|length] | min -%}
           {%- if nA > 0 -%}
           {%- set fd = namespace(v=0) -%}
           {%- for j in range(nA) -%}{%- set fd.v = fd.v + (cur_fine[j]-hist_fine[j])|abs -%}{%- endfor -%}
-          {%- set score.v = score.v + fd.v -%}
+          {%- set score.fine = fd.v / nA -%}
           {%- set score.has_any = true -%}
           {%- endif -%}
           {%- endif -%}
-          {%- if cur_coarse | length > 0 and i >= coarse_offset -%}
-          {%- set hist_coarse = curves_coarse[i - coarse_offset].split('|') | reject('in', ['', 'unknown','unavailable']) | map('float') | list -%}
+          {%- if cur_coarse | length > 0 and i < (curves_coarse | length) -%}
+          {%- set hist_coarse = curves_coarse[i].split('|') | reject('in', ['', 'unknown','unavailable', '-']) | map('float') | list -%}
           {%- set nB = [cur_coarse|length, hist_coarse|length] | min -%}
           {%- if nB > 0 -%}
           {%- set cd = namespace(v=0) -%}
           {%- for j in range(nB) -%}{%- set cd.v = cd.v + (cur_coarse[j]-hist_coarse[j])|abs -%}{%- endfor -%}
-          {%- set score.v = score.v + cd.v -%}
+          {%- set score.coarse = cd.v / nB -%}
           {%- set score.has_any = true -%}
           {%- endif -%}
           {%- endif -%}
           {%- if score.has_any -%}
-          {%- if ns.best_score is none or score.v < ns.best_score -%}
+          {# combined distance = mean of the per-series mean-abs-errors, so a curve
+             scored on fine+coarse is not penalised for having more comparison points
+             than one scored on fine only. #}
+          {%- set sv = ((score.fine + score.coarse) / 2) if (score.fine is not none and score.coarse is not none) else (score.fine if score.fine is not none else score.coarse) -%}
+          {%- if ns.best_score is none or sv < ns.best_score -%}
           {%- set ns.second_score = ns.best_score -%}
           {%- set ns.second_i = ns.best_i -%}
-          {%- set ns.best_score = score.v -%}
+          {%- set ns.best_score = sv -%}
           {%- set ns.best_i = i -%}
-          {%- elif ns.second_score is none or score.v < ns.second_score -%}
-          {%- set ns.second_score = score.v -%}
+          {%- elif ns.second_score is none or sv < ns.second_score -%}
+          {%- set ns.second_score = sv -%}
           {%- set ns.second_i = i -%}
           {%- endif -%}
           {%- endif -%}
@@ -505,6 +520,14 @@ automation:
         {{ ((now().timestamp() - state_attr('input_datetime.device_session_start', 'timestamp')) / 60) | round(0)
            if state_attr('input_datetime.device_session_start', 'timestamp') is not none else 0 }}
       kwh_total: "{{ states('sensor.device_energy_session') | float(0) | round(3) }}"
+      # The coarse curve to store for this run. If the run was too short to log
+      # any coarse checkpoint, store a literal "-" placeholder instead of an
+      # empty string, so device_session_curves_coarse always keeps exactly one
+      # slot per stored curve and stays positionally 1:1 with the fine curves
+      # (the matcher relies on curves_coarse[i] lining up with curves_fine[i]).
+      coarse_to_store: >-
+        {% set g = states('input_text.device_current_curve_coarse') %}
+        {{ g if g not in ['', 'unknown', 'unavailable'] else '-' }}
       match_index: >-
         {% set cd = states('input_text.device_curve_durations').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
         {% set ck = states('input_text.device_curve_kwh').split(',') | reject('in', ['', 'unknown','unavailable']) | map('float') | list %}
@@ -525,7 +548,7 @@ automation:
         {% set cf = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
         {% set cg = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
         {% set fine_pts = (cf[idx].split('|') | reject('eq','') | list | length) if idx < (cf|length) else 0 %}
-        {% set coarse_pts = (cg[idx].split('|') | reject('eq','') | list | length) if idx < (cg|length) else 0 %}
+        {% set coarse_pts = (cg[idx].split('|') | reject('in', ['', '-']) | list | length) if idx < (cg|length) else 0 %}
         {% set fine_expected = [ (existing_dur // 10) | int, 6 ] | min %}
         {% set coarse_expected = [ (existing_dur // 20) | int, 9 ] | min %}
         {% set total_expected = [fine_expected + coarse_expected, 1] | max %}
@@ -613,7 +636,7 @@ automation:
                   value: >-
                     {% set cur = states('input_text.device_session_curves_coarse') %}
                     {% set lst = (cur.split(';') if cur not in ['', 'unknown', 'unavailable'] else []) %}
-                    {% set lst = lst + [states('input_text.device_current_curve_coarse')] %}
+                    {% set lst = lst + [coarse_to_store] %}
                     {{ lst[-8:] | join(';') }}
               - action: input_text.set_value
                 target:
@@ -662,7 +685,7 @@ automation:
                   value: >-
                     {% set lst = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
                     {% set idx = evict_index | int %}
-                    {{ (lst[:idx] + [states('input_text.device_current_curve_coarse')] + lst[idx+1:]) | join(';') }}
+                    {{ (lst[:idx] + [coarse_to_store] + lst[idx+1:]) | join(';') }}
               - action: input_text.set_value
                 target:
                   entity_id: input_text.device_curve_durations
@@ -731,9 +754,9 @@ automation:
                     {% set lst = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
                     {% set idx = match_index | int %}
                     {% if idx < (lst|length) %}
-                    {% set new_lst = lst[:idx] + [states('input_text.device_current_curve_coarse')] + lst[idx+1:] %}
+                    {% set new_lst = lst[:idx] + [coarse_to_store] + lst[idx+1:] %}
                     {% else %}
-                    {% set new_lst = lst + [states('input_text.device_current_curve_coarse')] %}
+                    {% set new_lst = lst + [coarse_to_store] %}
                     {% endif %}
                     {{ new_lst[-8:] | join(';') }}
               - action: input_text.set_value
