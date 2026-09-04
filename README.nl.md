@@ -247,6 +247,38 @@ YAML-package):
   `history-graph` als alternatief staat in de comments. Geef de `path:`
   van de view en de `navigation_path` van de kaart dezelfde waarde.
 
+### Screenshots
+
+De subview in actie bij een wasmachine (entiteiten hier hernoemd naar
+`wasmachine_*` — bij jou heten ze zoals jij hebt gekozen):
+
+<table>
+<tr><td width="50%">
+
+**Status, live grafiek & sessies per dag**
+<br>Vermogen, sessieverbruik, en het aantal sessies per dag over de
+laatste 7 dagen.
+
+<img src="images/image1.png" alt="Subview: statustegels, live vermogen/verbruik-grafiek en sessies per dag">
+
+</td><td width="50%">
+
+**Curve-geschiedenis**
+<br>De maximaal 8 opgeslagen duur/verbruik-curves waar de matcher tegen
+vergelijkt.
+
+<img src="images/image2.png" alt="Subview: tabel met opgeslagen curve-geschiedenis (duur + kWh per slot)">
+
+</td></tr>
+</table>
+
+**Ruwe data**
+<br>De onderliggende helper-waarden (sessiestart, duur/kWh-logs, de
+huidige en opgeslagen fijne/grove curves) — handig bij het afstellen van
+drempels of het uitpluizen van een match.
+
+<img src="images/image3.png" alt="Subview: ruwe-data-overzicht van de onderliggende helpers" width="50%">
+
 ---
 
 ## Marges en instellingen aanpassen

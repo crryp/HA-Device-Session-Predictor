@@ -236,6 +236,37 @@ package):
   noted inline. Give the view's `path:` and the card's `navigation_path`
   the same value.
 
+### Screenshots
+
+Subview in action on a washing machine (entities renamed to `wasmachine_*`
+for this setup — yours will show whatever name you chose):
+
+<table>
+<tr><td width="50%">
+
+**Status, live chart & sessions per day**
+<br>Power draw, session energy, and the last 7 days of run counts.
+
+<img src="images/image1.png" alt="Subview: status tiles, live power/energy chart, and sessions per day">
+
+</td><td width="50%">
+
+**Curve history**
+<br>The up to 8 stored duration/energy curves the matcher compares
+against.
+
+<img src="images/image2.png" alt="Subview: stored curve history table (duration + kWh per slot)">
+
+</td></tr>
+</table>
+
+**Raw data**
+<br>The underlying helper values (session start, duration/kWh logs, the
+current and stored fine/coarse curves) — handy when tuning thresholds or
+debugging a match.
+
+<img src="images/image3.png" alt="Subview: raw data dump of the underlying helpers" width="50%">
+
 ---
 
 ## Adjusting margins and settings
