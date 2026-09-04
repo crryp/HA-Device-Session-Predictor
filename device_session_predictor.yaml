@@ -405,9 +405,10 @@ automation:
     triggers:
       - trigger: numeric_state
         entity_id: sensor.FILL_IN_YOUR_POWER_SENSOR   # <-- ADJUST
-        above: 40   # <-- ADJUST: start threshold in Watts
+        above: 20   # <-- ADJUST: start threshold in Watts (20W/30s worked
+                    #     well for a washing machine on a HomeWizard socket)
         for:
-          minutes: 3   # <-- ADJUST: how long it must hold continuously
+          seconds: 30   # <-- ADJUST: how long it must hold continuously
     conditions:
       - condition: state
         entity_id: input_boolean.device_session_active
@@ -548,7 +549,10 @@ automation:
         {% set cf = states('input_text.device_session_curves').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
         {% set cg = states('input_text.device_session_curves_coarse').split(';') | reject('in', ['', 'unknown','unavailable']) | list %}
         {% set fine_pts = (cf[idx].split('|') | reject('eq','') | list | length) if idx < (cf|length) else 0 %}
-        {% set coarse_pts = (cg[idx].split('|') | reject('in', ['', '-']) | list | length) if idx < (cg|length) else 0 %}
+        {% set coarse_pts = (cg[idx].split('|') | reject('eq','') | list | length) if idx < (cg|length) else 0 %}
+        {# NOTE: intentionally NOT filtering out the "-" placeholder here.
+           A stored "-" (run too short for a coarse checkpoint) still counts
+           as 1 point, same as the live reference implementation. #}
         {% set fine_expected = [ (existing_dur // 10) | int, 6 ] | min %}
         {% set coarse_expected = [ (existing_dur // 20) | int, 9 ] | min %}
         {% set total_expected = [fine_expected + coarse_expected, 1] | max %}

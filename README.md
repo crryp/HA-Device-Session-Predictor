@@ -82,8 +82,8 @@ works with any sensor that reports a power value in Watts.
 
 | File | What |
 |---|---|
-| `packages/device_session_predictor.yaml` | **Required.** The core: session detection, checkpoints, curve matching, remaining-time sensor. |
-| `packages/device_ready_notification.yaml` | **Optional.** Push notification + timed light signal once a session finishes, then a deterministic restore (your resting scene if the light should be on, otherwise off). |
+| `device_session_predictor.yaml` | **Required.** The core: session detection, checkpoints, curve matching, remaining-time sensor. |
+| `device_ready_notification.yaml` | **Optional.** A reusable `device_ready_signal` script (push notification + timed light signal, then a deterministic restore) plus a small automation that calls it on session end. |
 | `dashboard-card.yaml` | Compact Mushroom card (power + remaining time) that links through to the detail subview. |
 | `dashboard-subview.yaml` | Full-page detail subview: status, live chart, per-day session counts, curve history, raw data. |
 
@@ -111,7 +111,7 @@ If not, add it. Create a `packages/` folder next to your
 
 ### Step 2 — Copy the main file
 
-Place `packages/device_session_predictor.yaml` into your `config/packages/`
+Place `device_session_predictor.yaml` into your `config/packages/`
 folder.
 
 ### Step 3 — Fill in the placeholders
@@ -140,6 +140,11 @@ graph during a full program cycle. Pay attention to:
   being done (your end threshold needs to sit below that, and/or the end
   duration needs to be longer than the longest "normal" pause).
 
+The shipped defaults (20W held 30s to start, 35W held 2m30s to end) are the
+values that worked well on a real washing machine with a HomeWizard Energy
+Socket — a reasonable starting point, but still worth checking against your
+own appliance's history graph.
+
 ### Step 4 — Restart Home Assistant
 
 Packages load most reliably with a full restart (Settings → System →
@@ -156,13 +161,27 @@ are there and enabled.
 ### Step 6 (optional) — Ready notification + light
 
 Want a push notification (and optionally a light signal) once a session is
-done? Repeat steps 2-4 with `packages/device_ready_notification.yaml`,
-filling in your own notify service, the signal light, and a resting scene
-for that light (what it should look like whenever it is normally on). The
-signal colour is held for up to 20 minutes (or until you tap the
-notification), then the light is put back deterministically — resting
-scene if it should be on, otherwise off. Remove the light steps if you
-only want the notification.
+done? Place `device_ready_notification.yaml` into `config/packages/` too
+and restart. It has two parts:
+
+- A reusable **script** (`script.device_ready_signal`) that does the work:
+  sets a light to a signal colour, sends the push notification with an Ok
+  button, waits up to 20 minutes (or until you tap it, or someone switches
+  the light themselves), then restores the light deterministically —
+  resting scene if it should be on, otherwise off. Fill in your signal
+  light, notify service, and resting scene (search `FILL_IN` inside the
+  `script:` block).
+- A small **automation** that triggers on session end and calls the script
+  with this appliance's colour/message (search `ADJUST` inside the
+  `automation:` block).
+
+Using this for more than one appliance (washer + dryer, ...)? The script
+only needs to exist once — copy just the automation block for each
+additional appliance, give it a new `id`/`alias`, point its trigger at
+that appliance's own `input_boolean.*_session_active`, and give it a
+unique `ok_action` (so the right Ok tap resolves to the right
+notification). Remove the light steps in the script if you only want the
+plain notification.
 
 ---
 
@@ -188,12 +207,19 @@ works too — it just takes more clicks. Create the following helpers via
 | Counter | Device session counter |
 
 Also create:
-- An **Integration helper** ("Riemann sum") with your power sensor as the
-  source, unit prefix "k", unit time "h" — this gives you cumulative kWh.
-- A **Utility Meter helper** with the integration sensor you just created
-  as the source, cycle "none".
+- An **Integration helper** ("Riemann sum") named **"Device energy"** (→
+  `sensor.device_energy`, referenced by name further below) with your power
+  sensor as the source, unit prefix "k", unit time "h" — this gives you
+  cumulative kWh.
+- A **Utility Meter helper** named **"Device energy session"** (→
+  `sensor.device_energy_session`) with the integration sensor you just
+  created as the source, cycle "none". These exact names matter: the
+  automations you'll paste in further below reference
+  `sensor.device_energy` / `sensor.device_energy_session` directly (not a
+  `FILL_IN` placeholder), so a different name here means a different
+  entity_id and a broken reference.
 - Two **Template sensors** using the `value_template` blocks from
-  `packages/device_session_predictor.yaml`: `device_remaining_time` (the
+  `device_session_predictor.yaml`: `device_remaining_time` (the
   ETA) and `device_match_curve` (a short label of which stored curve the
   ETA is currently based on, e.g. "Curve #3 · ~125 min · 0.63 kWh", or
   "No session" when idle).
@@ -202,7 +228,7 @@ Also create:
   each with its start/end window shifted a day further back. These feed a
   "sessions per day" dashboard chart and are not used by the prediction.
   Copy the `start:`/`end:` templates from the `history_stats` sensors in
-  `packages/device_session_predictor.yaml`.
+  `device_session_predictor.yaml`.
 
 Then create the two automations via **Settings → Automations → Add
 Automation → Edit in YAML**, and paste in the contents of the corresponding
@@ -214,6 +240,23 @@ for the helpers match what's referenced in the automations and the sensor
 template (Home Assistant usually auto-generates the entity_id from the
 name you enter, e.g. "Device session active" →
 `input_boolean.device_session_active`).
+
+### Optional: ready notification + light, via the UI
+
+Go to **Settings → Automations & Scenes → Scripts → Add Script → (⋮) →
+Edit in YAML**, paste in the `script:` item's contents (just the part
+under `device_ready_signal:`) from `device_ready_notification.yaml`, and
+fill in your signal light, notify service, and resting scene (search
+`FILL_IN`). Save it as "Device ready signal" (→
+`script.device_ready_signal`).
+
+Then create one more automation the same way as before (**Settings →
+Automations → Add Automation → Edit in YAML**), pasting the `automation:`
+item's contents. This one calls the script above — if you're signalling
+more than one appliance, this is the only part you repeat per appliance
+(new trigger entity, own colour/message, and a unique `ok_action` per
+appliance so the right Ok tap resolves to the right notification); the
+script stays shared.
 
 ---
 

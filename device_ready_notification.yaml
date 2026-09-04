@@ -3,14 +3,21 @@
 # ============================================================================
 # Builds on device_session_predictor.yaml — that file is required.
 #
-# Sends a push notification once a session has finished, and can optionally
-# put a light in a signal color (e.g. green = done) for up to 20 minutes
-# (or until you tap the notification, or until someone switches the light
-# themselves). Afterwards the light is put back to a DETERMINISTIC resting
-# state:
-#   - it was on when the session ended        -> your resting scene
-#   - it was off, and nobody touched it       -> off
-#   - somebody switched it on during the wait -> your resting scene
+# Two parts, on purpose split like this:
+#   1. A reusable SCRIPT (`device_ready_signal`) that does the actual work:
+#      sets a light to a signal color, sends a push notification with a
+#      confirmation button, waits up to 20 minutes for the tap (or for
+#      someone to switch the light themselves), then restores the light to
+#      a DETERMINISTIC resting state:
+#        - it was on when the session ended        -> your resting scene
+#        - it was off, and nobody touched it       -> off
+#        - somebody switched it on during the wait -> your resting scene
+#      Written once and parametrized (color / message / ok_action), so if
+#      you use this for more than one appliance (washer + dryer, ...) you
+#      only need ONE script — copy just the small automation below per
+#      appliance, not the whole script.
+#   2. A small per-appliance AUTOMATION that triggers on session end and
+#      calls the script with that appliance's color and message.
 #
 # WHY NOT scene.create / snapshot?
 #   An earlier version snapshotted the light with `scene.create` and
@@ -38,46 +45,63 @@
 # BEFORE YOU USE THIS:
 #   1. Make sure device_session_predictor.yaml is active (this file uses
 #      input_boolean.device_session_active from it).
-#   2. Fill in your own notify service (search "FILL_IN").
-#   3. Fill in the light for the signal color. Use a light GROUP entity if
-#      you want to signal on several lamps at once.
-#   4. Fill in the resting scene: what the light should look like whenever
-#      it is normally on (e.g. a Hue "Relax" scene). A gradient lamp only
-#      comes back correctly if this is a real scene that includes it.
-#      Hue + gradient lamp: swap `scene.turn_on` in step 6 for
-#      `hue.activate_scene` (same target) so the multi-zone gradient is
-#      set correctly.
-#   5. Adjust the signal color (rgb_color/brightness_pct) to taste.
+#   2. In the SCRIPT: fill in your signal light (search "FILL_IN"). Use a
+#      light GROUP entity if you want to signal on several lamps at once.
+#      Fill in your notify service and the resting scene: what the light
+#      should look like whenever it is normally on (e.g. a Hue "Relax"
+#      scene). A gradient lamp only comes back correctly if this is a real
+#      scene that includes it. Hue + gradient lamp: swap `scene.turn_on`
+#      for `hue.activate_scene` (same target, add `dynamic: true` in data
+#      if your resting scene is a dynamic Hue scene).
+#   3. In the AUTOMATION: adjust the signal color/message, and give
+#      `ok_action` a value that's unique per appliance if you reuse the
+#      script for more than one (it identifies which notification's Ok
+#      button was tapped).
 # ============================================================================
 
-automation:
-  - id: device_ready_notification
-    alias: "Device ready notification"
+script:
+  device_ready_signal:
+    alias: "Device ready signal"
+    icon: mdi:bell-ring
     description: >-
-      Sets a light to a signal color, sends a notification with a
-      confirmation button, waits up to 20 minutes for the tap (or for
-      someone to switch the light themselves), and then restores the
-      light to a deterministic resting state: the resting scene if it
-      should be on, otherwise off. The resting scene is always re-applied
-      first so the signal color is never left behind on the bulb.
+      Shared by every appliance's ready notification. Sets a light to a
+      signal color, sends a push with an Ok button, waits up to 20 minutes
+      for the tap (or a genuine manual change to the light), then restores
+      the light to a deterministic resting state. Called with a different
+      color/message/ok_action per appliance — see the automation below.
     mode: restart
-    variables:
+    fields:
+      color:
+        description: "Signal color as [r, g, b]"
+        example: "[0, 255, 0]"
+        selector:
+          object: {}
+      message:
+        description: "Push notification text"
+        example: "Washer is ready"
+        selector:
+          text: {}
+      ok_action:
+        description: >-
+          notification action id for the Ok button. Must be unique per
+          appliance if you call this script for more than one.
+        example: "washer_ready_ok"
+        selector:
+          text: {}
+    sequence:
       # Was the signal light already on when the session ended? And when
       # does the 20-minute window end? Both captured once, at the start.
-      was_on: "{{ is_state('light.FILL_IN_YOUR_LIGHT', 'on') }}"   # <-- ADJUST
-      window_end: "{{ now().timestamp() + 1200 }}"
-    triggers:
-      - trigger: state
-        entity_id: input_boolean.device_session_active
-        to: "off"
-    actions:
+      - variables:
+          was_on: "{{ is_state('light.FILL_IN_YOUR_LIGHT', 'on') }}"   # <-- ADJUST
+          window_end: "{{ now().timestamp() + 1200 }}"
+
       # 1. Signal color. Remove this + the restore block if you only want
       #    the push notification without a light effect.
       - action: light.turn_on
         target:
           entity_id: light.FILL_IN_YOUR_LIGHT   # <-- ADJUST
         data:
-          rgb_color: [0, 255, 0]   # <-- ADJUST: signal color (here: green)
+          rgb_color: "{{ color }}"
           brightness_pct: 50
 
       # 2. Let the light settle a little before the wait starts listening.
@@ -85,12 +109,12 @@ automation:
           seconds: 2
 
       # 3. Notification with a confirmation button.
-      - action: notify.FILL_IN_YOUR_NOTIFY_SERVICE   # <-- ADJUST, e.g. notify.mobile_app_my_phone
+      - action: notify.FILL_IN_YOUR_NOTIFY_SERVICE   # <-- ADJUST, e.g. notify.mobile_app_my_phone or notify.notify
         data:
-          message: "Device is ready"
+          message: "{{ message }}"
           data:
             actions:
-              - action: "device_ready_ok"
+              - action: "{{ ok_action }}"
                 title: "Ok"
 
       # 4. Wait for: the Ok tap, OR a genuine manual change to the light,
@@ -103,7 +127,7 @@ automation:
                 - trigger: event
                   event_type: mobile_app_notification_action
                   event_data:
-                    action: "device_ready_ok"
+                    action: "{{ ok_action }}"
                   id: ok
                 - trigger: state
                   entity_id: light.FILL_IN_YOUR_LIGHT   # <-- ADJUST (same as above)
@@ -129,9 +153,6 @@ automation:
       # 6. Restore. Re-apply the resting scene on EVERY exit path (this is
       #    what guarantees the signal color is never left behind on the
       #    bulb), then turn the light back off if it should be off.
-      #    Hue + gradient lamp: use `hue.activate_scene` here instead
-      #    (add `dynamic: true` in data if your resting scene is a dynamic
-      #    Hue scene).
       #
       #    The turn-off has NO transition on purpose: a fade-to-off ramps
       #    brightness toward 0, and some bulbs then remember ~0 as their
@@ -152,3 +173,23 @@ automation:
           - action: light.turn_off
             target:
               entity_id: light.FILL_IN_YOUR_LIGHT   # <-- ADJUST
+
+automation:
+  - id: device_ready_notification
+    alias: "Device ready notification"
+    description: >-
+      On session end, calls device_ready_signal with this appliance's
+      color and message. If you're signalling several appliances with the
+      shared script above, copy just this automation block per appliance
+      (new id/alias, its own trigger entity, its own ok_action).
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.device_session_active
+        to: "off"
+    actions:
+      - action: script.device_ready_signal
+        data:
+          color: [0, 255, 0]   # <-- ADJUST: signal color (here: green)
+          message: "Device is ready"   # <-- ADJUST
+          ok_action: "device_ready_ok"   # <-- ADJUST: unique per appliance if reused

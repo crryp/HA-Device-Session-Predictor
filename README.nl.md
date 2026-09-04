@@ -92,8 +92,8 @@ Nederlandse uitleg erbij.
 
 | Bestand | Wat |
 |---|---|
-| `packages/device_session_predictor.yaml` | **Verplicht.** De kern: sessiedetectie, checkpoints, curve-matching, resterende-tijd-sensor. |
-| `packages/device_ready_notification.yaml` | **Optioneel.** Push-melding + tijdelijk lamp-signaal zodra een sessie is afgerond, met daarna een deterministisch herstel (je ruststand-scene als de lamp aan hoort te staan, anders uit). |
+| `device_session_predictor.yaml` | **Verplicht.** De kern: sessiedetectie, checkpoints, curve-matching, resterende-tijd-sensor. |
+| `device_ready_notification.yaml` | **Optioneel.** Een herbruikbaar `device_ready_signal`-script (push-melding + tijdelijk lamp-signaal, met daarna een deterministisch herstel) plus een klein automation-blokje dat het bij sessie-einde aanroept. |
 | `dashboard-card.yaml` | Compacte Mushroom-kaart (vermogen + resterende tijd) die doorklikt naar de detail-subview. |
 | `dashboard-subview.yaml` | Volledige detail-subview: status, live-grafiek, sessies per dag, curve-geschiedenis, ruwe data. |
 
@@ -120,7 +120,7 @@ aan naast je `configuration.yaml`.
 
 ### Stap 2 — Kopieer het hoofdbestand
 
-Zet `packages/device_session_predictor.yaml` in jouw `config/packages/`-map.
+Zet `device_session_predictor.yaml` in jouw `config/packages/`-map.
 
 ### Stap 3 — Vul de placeholders in
 
@@ -148,6 +148,11 @@ van je vermogenssensor tijdens een volledig programma. Let op:
   klaar is (je eind-drempel moet daaronder liggen, en/of de eind-duur moet
   langer zijn dan de langste "gewone" pauze).
 
+De standaardwaarden in het bestand (20W gedurende 30s voor start, 35W
+gedurende 2m30s voor einde) zijn de waarden die goed werkten op een echte
+wasmachine met een HomeWizard Energy Socket — een redelijk startpunt, maar
+check ze alsnog tegen de geschiedenisgrafiek van je eigen apparaat.
+
 ### Stap 4 — Herstart Home Assistant
 
 Packages worden het betrouwbaarst geladen met een volledige herstart
@@ -164,13 +169,26 @@ nieuwe automations er staan en ingeschakeld zijn.
 ### Stap 6 (optioneel) — Klaar-melding + lamp
 
 Wil je ook een push-melding (en optioneel een lamp-signaal) zodra een
-sessie klaar is? Herhaal stap 2-4 met
-`packages/device_ready_notification.yaml`, en vul daarin je eigen
-notify-service, de signaallamp en een ruststand-scene voor die lamp in
-(hoe de lamp eruitziet zodra hij normaal aan staat). De signaalkleur
-blijft maximaal 20 minuten staan (of tot je op de melding tikt), daarna
-gaat de lamp deterministisch terug — ruststand-scene als hij aan hoort te
-staan, anders uit. Verwijder de lamp-stappen als je alleen de melding
+sessie klaar is? Zet `device_ready_notification.yaml` ook in
+`config/packages/` en herstart. Het bestaat uit twee delen:
+
+- Een herbruikbaar **script** (`script.device_ready_signal`) dat het werk
+  doet: zet een lamp op een signaalkleur, stuurt de push-melding met een
+  Ok-knop, wacht maximaal 20 minuten (of tot je erop tikt, of tot iemand
+  de lamp zelf omschakelt), en herstelt de lamp daarna deterministisch —
+  ruststand-scene als hij aan hoort te staan, anders uit. Vul hierin je
+  signaallamp, notify-service en ruststand-scene in (zoek naar `FILL_IN`
+  binnen het `script:`-blok).
+- Een klein **automation**-blokje dat bij sessie-einde triggert en het
+  script aanroept met de kleur/melding van dit apparaat (zoek naar
+  `ADJUST` binnen het `automation:`-blok).
+
+Gebruik je dit voor meer dan één apparaat (wasmachine + droger, ...)? Het
+script hoeft maar één keer te bestaan — kopieer per extra apparaat alleen
+het automation-blokje, geef het een nieuwe `id`/`alias`, laat de trigger
+verwijzen naar de `input_boolean.*_sessie_bezig` van dat apparaat, en geef
+het een unieke `ok_action` (zodat de juiste Ok-tik bij de juiste melding
+hoort). Verwijder de lamp-stappen in het script als je alleen de melding
 wilt.
 
 ---
@@ -197,13 +215,19 @@ ook — het kost alleen meer klikwerk. Maak de volgende helpers aan via
 | Teller | Device session counter |
 
 Maak daarnaast aan:
-- Een **Integratie-helper** ("Riemann-som") met als bron je vermogenssensor,
-  eenheid-voorvoegsel "k", eenheid-tijd "h" — dit geeft je de cumulatieve
-  kWh.
-- Een **Utility Meter-helper** met als bron de zojuist gemaakte
-  integratie-sensor, cyclus "geen".
+- Een **Integratie-helper** ("Riemann-som") met de naam **"Device energy"**
+  (→ `sensor.device_energy`, verderop bij naam gebruikt) en als bron je
+  vermogenssensor, eenheid-voorvoegsel "k", eenheid-tijd "h" — dit geeft je
+  de cumulatieve kWh.
+- Een **Utility Meter-helper** met de naam **"Device energy session"** (→
+  `sensor.device_energy_session`) en als bron de zojuist gemaakte
+  integratie-sensor, cyclus "geen". Deze exacte namen zijn belangrijk: de
+  automations die je verderop plakt verwijzen rechtstreeks naar
+  `sensor.device_energy` / `sensor.device_energy_session` (geen
+  `FILL_IN`-placeholder), dus een andere naam hier geeft een andere
+  entity_id en een gebroken verwijzing.
 - Twee **Template-sensoren** met de `value_template`-blokken uit
-  `packages/device_session_predictor.yaml`: `device_remaining_time` (de
+  `device_session_predictor.yaml`: `device_remaining_time` (de
   schatting) en `device_match_curve` (een kort label van welke opgeslagen
   curve die schatting nu gebruikt, bijv. "Curve #3 · ~125 min · 0.63
   kWh", of "No session" als er niks draait).
@@ -212,7 +236,7 @@ Maak daarnaast aan:
   dag, met het start/eind-venster telkens een dag verder terug. Deze voeden
   een "sessies per dag"-grafiek op je dashboard en worden niet door de
   voorspelling gebruikt. Kopieer de `start:`/`end:`-templates uit de
-  `history_stats`-sensoren in `packages/device_session_predictor.yaml`.
+  `history_stats`-sensoren in `device_session_predictor.yaml`.
 
 Maak vervolgens de twee automations aan via **Instellingen →
 Automatiseringen → Automatisering toevoegen → In YAML bewerken**, en plak
@@ -224,6 +248,23 @@ helpers hebt gekozen, laten overeenkomen met wat er in de automations en de
 sensor-template staat (Home Assistant genereert de entity_id meestal
 automatisch op basis van de naam die je invoert, bijv. "Device session
 active" → `input_boolean.device_session_active`).
+
+### Optioneel: klaar-melding + lamp, via de UI
+
+Ga naar **Instellingen → Automatiseringen en scènes → Scripts → Script
+toevoegen → (⋮) → In YAML bewerken**, plak de inhoud van het `script:`-item
+(alleen het deel onder `device_ready_signal:`) uit
+`device_ready_notification.yaml`, en vul je signaallamp, notify-service en
+ruststand-scene in (zoek naar `FILL_IN`). Sla het op als "Device ready
+signal" (→ `script.device_ready_signal`).
+
+Maak daarna nog één automation aan, op dezelfde manier als hierboven
+(**Instellingen → Automatiseringen → Automatisering toevoegen → In YAML
+bewerken**), en plak de inhoud van het `automation:`-item. Deze roept het
+script hierboven aan — gebruik je dit voor meer dan één apparaat, dan is
+dit het enige deel dat je per apparaat herhaalt (eigen trigger-entiteit,
+eigen kleur/melding, en een unieke `ok_action` per apparaat zodat de
+juiste Ok-tik bij de juiste melding hoort); het script blijft gedeeld.
 
 ---
 
